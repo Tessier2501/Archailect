@@ -2,7 +2,6 @@
 
 > 交接对象: 任一后续 agent. 请先完整阅读本文档, 再按执行清单逐步实施.
 > 实施环境: WSL2 Ubuntu, conda 环境 myenv (Python 3.14.6), 目标路径 ~/Archailect (Linux 原生路径).
-> 关键约束: 所有方案已对照 lightrag-hku 1.5.6 官方源码逐行验证. 不要凭旧教程/旧 API 印象修改.
 > 权威代码: 全部实现以 src/ 目录下的源码为准. 本文档不内嵌参考代码, 以避免文档与源码漂移.
 
 ---
@@ -11,32 +10,21 @@
 
 构建一个多本书独立隔离的书籍知识库问答后端:
 
-- 前端: Cherry Studio (或其他 LLM 平台), 使用标准 OpenAI 接口格式.
+- 前端: 使用标准 OpenAI 接口格式的 LLM 平台.
 - 后端: FastAPI + Uvicorn, 暴露 POST /v1/chat/completions.
 - RAG 引擎: lightrag-hku (锁定 1.5.6).
-- LLM Provider: cherryin 网关 https://open.cherryin.ai/v1, 模型 ID deepseek/deepseek-v4-flash. 后期可切回 DeepSeek 官方 (api.deepseek.com/v1 + deepseek-chat), 仅改 .env 两行.
-- Embedding: Qwen3-Embedding-8B 已定案, 模型 ID qwen/qwen3-embedding-8b, 上下文窗口 32768, 经 cherryin 网关. 输出维度 4096 (已实测确认). lightrag-hku 1.5.6 在实例化即强制校验 embedding_func, 不允许 None.
+- LLM: 占位符
+- Embedding: 占位符
 
 三大核心功能:
 
 1. 多书路由: 按请求 model 字段懒加载/缓存指向 storage/{model} 的独立 LightRAG 实例; 目录不存在时返回 OpenAI 规范错误结构 (404).
 2. System Prompt 透传: 提取 messages 中所有 system 消息并原样保留, 经转义 + 模板包装后与 LightRAG 检索上下文合并, 一并交给 LLM.
-3. OpenAI 兼容响应: 非流式 JSON 与流式 SSE 两种格式, Cherry Studio 可直接渲染.
+3. OpenAI 兼容响应: 非流式 JSON 与流式 SSE 两种格式, 前端平台可直接渲染.
 
 ---
 
 ## 2. 技术栈与版本锁定
-
-| 组件 | 版本 | 说明 |
-|---|---|---|
-| Python | >= 3.10 (当前 3.14.6) | lightrag-hku 要求 >=3.10 |
-| lightrag-hku | ==1.5.6 | 硬锁定. 该库 API 迭代极快, 升级需重新对照源码验证 |
-| openai | >=2.0,<3.0 | 硬依赖: lightrag.llm.openai 顶层 import (openai.py 第 15 行) |
-| fastapi | >=0.115 | |
-| uvicorn[standard] | >=0.30 | |
-| python-dotenv | >=1.0 | 读取 .env |
-| LLM (ds v4 flash) | deepseek/deepseek-v4-flash | cherryin 网关; 后期可切回官方 |
-| Embedding (Qwen3) | qwen/qwen3-embedding-8b | cherryin 网关; DIM=4096, MAX_TOKEN=32768 (均已实测/确认) |
 
 ### requirements.txt
 
@@ -67,7 +55,7 @@ venv/
 
 ---
 
-## 3. 源码验证结论 (lightrag-hku 1.5.6)
+## 3. 源码验证结论
 
 ### 3.1 LightRAG 是 @dataclass
 
@@ -204,17 +192,15 @@ async def openai_complete_if_cache(
 └── storage/                  # LightRAG 索引 (git 忽略) storage/{book}/
 ```
 
-> 说明: src/ 源码即唯一权威实现, 不再在本文档内嵌参考代码, 避免漂移.
-
 ---
 
 ## 5. 建图与运行
 
 ### 5.1 当前状态
 
-- 第 4 次建图尝试已失败: cherryin 响应慢触发 LightRAG 提取 worker 480s 超时 (15 次 TimeoutError), 文档提取被放弃, 索引残缺.
+- 建图尝试已失败: cherryin 响应慢触发 LightRAG 提取 worker 480s 超时 (15 次 TimeoutError), 文档提取被放弃, 索引残缺.
 - 已在 .env 追加 LLM_TIMEOUT=900 解决超时上限; 失败进程已终止, storage/rifters 已清空待重跑.
-- 重跑命令见 5.2 执行清单第 6 步; 完成后需验证: storage/rifters 下索引完整 (含 entities/relations/graphml) 且日志无 "Failed to extract".
+- 重跑命令见 5.2 执行清单第 6 步; 完成后需验证: storage/rifters 下索引完整 (含 entities/relations/graphml) 且日志无 "Failed to extract". 准备更换llm和embedding提供商. 当前在文档中使用占位符占位.
 
 ### 5.2 执行清单
 
@@ -251,7 +237,7 @@ python -m src.api_server
 # 默认 0.0.0.0:8000
 ```
 
-### Cherry Studio 接入
+### 前端 LLM 平台接入
 
 1. 设置 -> 接入提供方 -> 添加自定义 OpenAI 兼容服务商.
 2. API 地址: http://localhost:8000/v1 (远程则填服务器 IP/域名).
