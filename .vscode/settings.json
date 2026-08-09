@@ -1,0 +1,4 @@
+{
+  "python.terminal.useEnvFile": true,
+  "python.defaultInterpreterPath": "/home/tessier/anaconda3/envs/myenv/bin/python"
+}
