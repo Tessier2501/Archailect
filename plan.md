@@ -1,8 +1,9 @@
-# My Novel RAG — 实施计划书（交接用）
+# My Novel RAG — 实施计划书（WSL2 修订版）
 
 > **交接对象**：任一后续 agent。请先完整阅读本文档，再按「执行清单」逐步实施。
-> **状态**：待 WSL2 环境就绪后执行。目标平台为 Linux (WSL2 Ubuntu)。
-> **关键约束**：所有方案已对照 `lightrag-hku 1.5.5` 官方源码逐行验证，**不要凭旧教程/旧 API 印象修改**。
+> **状态**：实施环境已确认为 **WSL2 Ubuntu（原生 Linux）**，目标 Python 环境为 `myenv`（当前 Python 3.14.6）。
+> **关键约束**：所有方案已对照 `lightrag-hku 1.5.6` 官方源码（wheel 解压于 `/tmp/lr_1_5_6/src/`）逐行验证。**不要凭旧教程/旧 API 印象修改**。
+> **版本说明**：本版由旧 plan.md 修订而来，核心变更为锁定 **lightrag-hku==1.5.6**（旧版锁定 1.5.5），并修正依赖清单与环境适配。
 
 ---
 
@@ -12,14 +13,14 @@
 
 - 前端：Cherry Studio（或其他 LLM 平台），使用标准 OpenAI 接口格式。
 - 后端：FastAPI + Uvicorn，暴露 `POST /v1/chat/completions`。
-- RAG 引擎：`lightrag-hku`（**锁定 1.5.5**）。
+- RAG 引擎：`lightrag-hku`（**锁定 1.5.6**，1.5.6 为 PyPI 当前最新版，本地 wheel 已备于 `/tmp/lr_1_5_6/lightrag_hku-1.5.6-py3-none-any.whl`）。
 - LLM：DeepSeek（OpenAI 兼容 API）。
-- Embedding：第三方 OpenAI 兼容 API（**暂未定案，代码预留接入点，未配置时返回 `None`；定案配置后才能进入正式建图/查询链路，配置后须重建全部索引**）。
+- Embedding：第三方 OpenAI 兼容 API（**框架阶段 `.env` 填入占位值以构造 `EmbeddingFunc`；1.5.6 在实例化即强制校验 embedding_func，不允许 `None`；真实建图前必须替换为有效 embedding API，更换模型须重建索引**）。
 
 三大核心功能：
 
-1. **多书路由**：按请求 `model` 字段（如 `novel-three-body`）懒加载/缓存指向 `storage/{model}` 的独立 LightRAG 实例；目录不存在时返回友好错误。
-2. **System Prompt 透传**：提取 `messages` 中所有 `system` 消息并原样保留，与 LightRAG 检索上下文合并后一并交给 DeepSeek。
+1. **多书路由**：按请求 `model` 字段（如 `novel-three-body`）懒加载/缓存指向 `storage/{model}` 的独立 LightRAG 实例；目录不存在时返回 OpenAI 规范错误结构（404）。
+2. **System Prompt 透传**：提取 `messages` 中所有 `system` 消息并原样保留，经转义 + 模板包装后与 LightRAG 检索上下文合并，一并交给 DeepSeek。
 3. **OpenAI 兼容响应**：非流式 JSON 与流式 SSE 两种格式，Cherry Studio 可直接渲染。
 
 ---
@@ -28,8 +29,9 @@
 
 | 组件 | 版本 | 说明 |
 |---|---|---|
-| Python | >= 3.10（建议 3.11） | `lightrag-hku` 要求 >=3.10 |
-| lightrag-hku | **==1.5.5** | 硬锁定。该库 API 迭代极快，升级需重新对照源码验证 |
+| Python | >= 3.10（当前环境 3.14.6） | `lightrag-hku` 要求 >=3.10；见 §8 风险 #2 |
+| lightrag-hku | **==1.5.6** | 硬锁定。该库 API 迭代极快，升级需重新对照源码验证 |
+| openai | >=2.0,<3.0 | **必须显式安装**：`lightrag.llm.openai` 顶层 `from openai import ...`（openai.py:15）硬依赖；1.5.6 api extra 约束 `>=2.0.0,<3.0.0` |
 | fastapi | >=0.115 | |
 | uvicorn[standard] | >=0.30 | |
 | python-dotenv | >=1.0 | 读取 .env |
@@ -41,9 +43,12 @@
 ```txt
 fastapi>=0.115
 uvicorn[standard]>=0.30
-lightrag-hku==1.5.5
+lightrag-hku==1.5.6
+openai>=2.0,<3.0
 python-dotenv>=1.0
 ```
+
+> 依赖说明：1.5.6 的 `openai` 是硬依赖而非可选（`lightrag/llm/openai.py` 顶层导入），旧版 requirements 遗漏此项，本版已修正。
 
 ### .gitignore（最终交付，必须包含）
 
@@ -64,15 +69,16 @@ venv/
 
 ---
 
-## 3. 源码验证结论（lightrag-hku 1.5.5，勿踩坑）
+## 3. 源码验证结论（lightrag-hku 1.5.6，勿踩坑）
 
-以下结论来自对 1.5.5 wheel 源码的逐行核对。网上大多数教程基于 1.3.x/1.4.x，**已失效**。
+以下结论来自对 1.5.6 wheel 源码（`/tmp/lr_1_5_6/src/`）的逐行核对。网上大多数教程基于 1.3.x/1.4.x，**已失效**。旧 plan.md 基于 1.5.5，其核心结论经核对在 1.5.6 中依然成立，差异点见 §3.5。
 
 ### 3.1 LightRAG 是 @dataclass，不是传统 __init__
 
+- `@dataclass class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin)`（lightrag.py:385）。
 - 构造参数全部为类字段（keyword-only 方式传入）。
-- 关键字段：`working_dir`、`llm_model_func`、`llm_model_name`、`llm_model_kwargs`、`embedding_func`。
-- 无需手动调用 `initialize_storages()`/`finalize_storages()` 之外的初始化——`ainsert`/`aquery` 内部会自动管理（`auto_manage_storages_states` 默认 False，但建图/查询路径内有自动初始化逻辑；为稳妥可显式调用，见 §5 代码）。
+- 关键字段：`working_dir`、`llm_model_func`、`llm_model_name`、`llm_model_kwargs`、`embedding_func`（lightrag.py:617-722）。
+- `initialize_storages()`（lightrag.py:1556）/ `finalize_storages()`（lightrag.py:1644）仍存在；`ainsert`/`aquery` 内部有自动初始化逻辑，但为稳妥在代码中显式调用（见 §5.4 / §5.5）。
 
 ### 3.2 ainsert 新签名
 
@@ -85,10 +91,13 @@ async def ainsert(
     ids: str | list[str] | None = None,
     file_paths: str | list[str] | None = None,
     track_id: str | None = None,
-)
+) -> str
 ```
+（lightrag.py:1762-1770）
 
-- 旧的 `chip_size` / `chunk_overlap_size` 参数已移除 → 分块参数改由 `addon_params`（InitVar）控制，默认即可，**不要传旧参数**。
+- 旧的 `chip_size` / `chunk_overlap_size` 参数已移除 → 分块参数改由 `addon_params`（InitVar）控制；`ainsert` 固定使用 fixed-token 分块策略，默认即可，**不要传旧参数**。
+- 返回值为 tracking ID（新行为，1.5.5 即为如此）。
+- 如需递归字符 (R) / 语义向量 (V) / 段落语义 (P) 分块策略，须改用 `apipeline_enqueue_documents` + `apipeline_process_enqueue_documents`（SDK 的 `ainsert` 无法选择这些策略，见 lightrag.py:1771-1789 文档注）。本项目默认使用 `ainsert` 即可。
 
 ### 3.3 aquery / aquery_llm 签名（System Prompt 官方注入点）
 
@@ -100,13 +109,14 @@ async def aquery(
     system_prompt: str | None = None,
 ) -> str | AsyncIterator[str]
 ```
+（lightrag.py:3643-3648）
 
-- 第三个参数 `system_prompt` 即官方 System Prompt 注入点。`aquery` 内部包装 `aquery_llm`，按 `param.stream` 返回响应内容或异步迭代器。
-- **stream=True 时返回 `AsyncIterator[str]`，非流式返回 `str`**。
+- 第三个参数 `system_prompt` 即官方 System Prompt 注入点。`aquery` 内部包装 `aquery_llm`（lightrag.py:3666），按 `param.stream` 返回响应内容或异步迭代器。
+- **stream=True 时返回 `AsyncIterator[str]`，非流式返回 `str`**（lightrag.py:3671-3674）。
 
 ### 3.4 ★ 核心陷阱：system_prompt 会被强制 .format()
 
-`lightrag/operate.py` 的 `kg_query`（约 4198-4203 行）：
+`lightrag/operate.py` 的 `kg_query`（**1.5.6 行号 4288-4293**；旧 plan.md 记载 4198 为 1.5.5 行号）：
 
 ```python
 sys_prompt_temp = system_prompt if system_prompt else PROMPTS["rag_response"]
@@ -122,7 +132,9 @@ sys_prompt = sys_prompt_temp.format(
 2. 原文若含任意 `{...}`（如 JSON 示例、正则）→ `.format()` 抛 `KeyError`/`IndexError`。
 3. **正确做法**：服务端先把用户原文的 `{`→`{{`、`}`→`}}` 转义，再包装成含 `{response_type}`/`{user_prompt}`/`{context_data}` 占位符的模板传入 `aquery(..., system_prompt=模板)`。
 
-### 3.5 QueryParam 关键字段
+> 注意：`.format()` 强制发生在 `kg_query` 的 local/global/hybrid/mix 路径（operate.py:4288）。naive/bypass 路径的模板行为见 operate.py 5300/6234 区域，本项目使用 hybrid 模式，走 4288 路径。
+
+### 3.5 QueryParam 关键字段 ★含 1.5.6 差异
 
 ```python
 QueryParam(
@@ -133,10 +145,14 @@ QueryParam(
     conversation_history=[],# [{"role","content"},...] 仅作上下文，不参与检索
 )
 ```
+（base.py:90-160）
+
+- **★ 1.5.6 差异**：默认 `mode` 从 1.5.5 的 `"hybrid"` 变为 **`"mix"`**（base.py:93）。本项目代码显式传 `mode="hybrid"` 故不受影响；但**不要依赖默认值**，查询时务必显式指定。
+- 1.5.6 新增字段（与此项目无关但需知晓）：`enable_rerank`（默认由 `RERANK_BY_DEFAULT` 环境变量控制，默认 true）、`include_references` 等。未配置 rerank 模型时 `enable_rerank=True` 仅发警告不报错。
 
 ### 3.6 LLM 封装
 
-`lightrag.llm.openai.openai_complete_if_cache` 签名（DeepSeek 直接用）：
+`lightrag.llm.openai.openai_complete_if_cache` 签名（openai.py:244，DeepSeek 直接用）：
 
 ```python
 async def openai_complete_if_cache(
@@ -150,9 +166,17 @@ async def openai_complete_if_cache(
     token_tracker: Any | None = None,
     stream: bool | None = None,
     timeout: int | None = None,
-    ...
+    keyword_extraction: bool = False,
+    use_azure: bool = False,
+    azure_deployment: str | None = None,
+    api_version: str | None = None,
+    image_inputs: list[Any] | None = None,
+    **kwargs: Any,
 ) -> str
 ```
+
+- 依赖 `openai>=2.0,<3.0`（顶层 `from openai import ...`，openai.py:15）。
+- 支持 DeepSeek 风格 `reasoning_content`（COT），非流式时以 `<think>` 标签前置；本项目不启用 `enable_cot`。
 
 ### 3.7 Embedding 接入（第三方程式，预留）
 
@@ -169,7 +193,10 @@ async def openai_embed(
     max_token_size: int | None = None,  # 由装饰器自动注入
     ...
 ) -> np.ndarray
+```
+（openai.py:955；`EmbeddingFunc` 定义 utils.py:540；`wrap_embedding_func_with_attrs` utils.py:2363）
 
+```python
 # 官方封装方式：
 embedding_func = EmbeddingFunc(
     embedding_dim=1024,
@@ -182,33 +209,35 @@ embedding_func = EmbeddingFunc(
 ```
 
 - 导入路径：`EmbeddingFunc` 与 `wrap_embedding_func_with_attrs` 位于 `lightrag.utils`。
-- **未配置时 `embedding_func=None`**：不影响代码运行与建图（hybrid 模式会退化为基于关键词/图的方式，效果打折）；但 Embedding API 定案后**必须重新建图**，见 §8 风险表。
+- **★ 1.5.6 强制 embedding（重大差异，推翻旧版假设）**：`LightRAG.__post_init__` 无条件实例化三个向量存储（lightrag.py:1447-1463），`_validate_embedding_func()`（base.py:241-245）在 `embedding_func=None` 时抛 `ValueError`。**`embedding_func` 在 1.5.6 下必填，不存在「无 embedding 跑纯净关键词」模式**（旧 plan.md 基于 1.5.5 的假设已失效，本章节旧文字作废）。
+- **框架阶段策略**：`.env` 的 `EMBEDDING_*` 填占位值，`build_embedding_func()` 始终构造 `EmbeddingFunc`（`openai_embed` 包装），使 `LightRAG` 正常实例化、服务框架可启动。占位配置下若误触发建图会得到 OpenAI API 明确报错（Fail-Fast），不会静默产生假数据。真实建图前必须替换为有效 embedding API；更换 embedding 模型须重建索引，见 §8 风险 #3。
 
 ### 3.8 其它
 
-- `QueryResult`：`content`（非流式文本）/ `response_iterator`（流式迭代器）/ `raw_data` / `is_streaming`。
-- `aquery_llm` 返回 dict，包含 `llm_response.content` 或 `llm_response.response_iterator`；`aquery` 已帮你解包，**业务侧直接用 `aquery`**。
+- `aquery` 已解包 `aquery_llm` 的返回 dict（lightrag.py:3666-3674），**业务侧直接用 `aquery`**，非流式取 `str`、流式取 `AsyncIterator[str]`。
+- `QueryResult` / `aquery_data`：如需结构化检索结果（不带 LLM 生成），用 `aquery_data(query, param)`（lightrag.py:3701），本项目暂不启用。
 
 ---
 
 ## 4. 目录结构规范（最终交付）
 
 ```
-my-novel-rag/
-├── .gitignore              # 必须含 /storage
-├── .env.example            # 环境变量模板
+Archailect/                   # 本项目根目录（即 plan 所在目录）
+├── plan.md                   # 本文档
+├── .gitignore                # 必须含 /storage
+├── .env.example              # 环境变量模板
 ├── requirements.txt
 ├── src/
 │   ├── __init__.py
-│   ├── config.py           # 环境变量 + LLM/Embedding 工厂
-│   ├── builder.py          # 离线建图
-│   └── api_server.py       # FastAPI 主服务
-├── data/                   # 原始 txt 书籍
+│   ├── config.py             # 环境变量 + LLM/Embedding 工厂
+│   ├── builder.py            # 离线建图
+│   └── api_server.py         # FastAPI 主服务
+├── data/                     # 原始 txt 书籍
 │   └── .gitkeep
-└── storage/                # LightRAG 索引 (git 忽略) storage/{book}/
+└── storage/                  # LightRAG 索引 (git 忽略) storage/{book}/
 ```
 
-> 项目根目录建议：`~/my-novel-rag`（WSL2 Linux 原生路径，避免 `/mnt/c` 性能问题）。
+> 项目根目录即 `/home/tessier/Archailect`（WSL2 Linux 原生路径，避免 `/mnt/c` 性能问题，已满足）。
 
 ---
 
@@ -236,7 +265,7 @@ from lightrag.utils import EmbeddingFunc, wrap_embedding_func_with_attrs
 load_dotenv()
 
 # ---- 路径 ----
-BASE_DIR = Path(__file__).resolve().parent.parent          # my-novel-rag/
+BASE_DIR = Path(__file__).resolve().parent.parent          # Archailect/
 DATA_DIR = BASE_DIR / "data"
 STORAGE_DIR = BASE_DIR / "storage"
 
@@ -261,15 +290,15 @@ EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 EMBEDDING_MAX_TOKEN_SIZE = int(os.getenv("EMBEDDING_MAX_TOKEN_SIZE", "8192"))
 
 
-def build_embedding_func() -> EmbeddingFunc | None:
+def build_embedding_func() -> EmbeddingFunc:
     """构造 OpenAI 兼容的 embedding 函数。
 
-    设计决策 (用户确认): 不做 Fail-Fast, 未配置 (.env 未填 EMBEDDING_* 三件套)
-    时返回 None。使用前提: embedding 定案并配好 API 后才进入正式建图/查询链路;
-    若用 None 建过图, 配置 embedding 后必须重建全部索引 (见 plan.md §8 风险表)。
+    设计决策 (用户确认): 1.5.6 在实例化即强制校验 embedding_func (不允许 None),
+    因此本函数始终返回 EmbeddingFunc。框架阶段 .env 的 EMBEDDING_* 为占位值,
+    使 LightRAG 可正常实例化、服务可启动; 占位配置下误触发建图会得到 OpenAI API
+    的明确报错 (Fail-Fast), 不会静默产生假数据。真实建图前必须将 EMBEDDING_*
+    替换为有效配置; 更换 embedding 模型后须重建全部索引 (见 plan.md §8 风险表)。
     """
-    if not (EMBEDDING_BASE_URL and EMBEDDING_API_KEY and EMBEDDING_MODEL):
-        return None
     return EmbeddingFunc(
         embedding_dim=EMBEDDING_DIM,
         max_token_size=EMBEDDING_MAX_TOKEN_SIZE,
@@ -288,12 +317,16 @@ DEEPSEEK_API_KEY=sk-xxxxxxxx
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 DEEPSEEK_MODEL=deepseek-chat
 
-# Embedding 第三方 OpenAI 兼容 API (预留, 定案后填写)
-EMBEDDING_BASE_URL=
-EMBEDDING_API_KEY=
-EMBEDDING_MODEL=
+# Embedding 第三方 OpenAI 兼容 API
+# 框架阶段填占位值即可 (使 LightRAG 可实例化); 真实建图前必须替换为有效配置
+EMBEDDING_BASE_URL=https://api.openai.com/v1
+EMBEDDING_API_KEY=sk-placeholder
+EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_DIM=1024
 EMBEDDING_MAX_TOKEN_SIZE=8192
+
+# 多书实例 LRU 缓存上限 (可选, 默认 8)
+RAG_CACHE_MAX=8
 ```
 
 ### 5.4 src/builder.py
@@ -327,7 +360,7 @@ def parse_args() -> argparse.Namespace:
         "--max-file-size-mb",
         type=int,
         default=200,
-        help="单文件大小上限 (MB), 默认 200。超大文本须先切片再分批 ainsert (见 §8)。",
+        help="单文件大小上限 (MB), 默认 200。超大文本须先切片再分批 ainsert (见 §8 风险 #13)。",
     )
     return parser.parse_args()
 
@@ -358,10 +391,10 @@ async def main() -> None:
     if file_size_mb > args.max_file_size_mb:
         raise RuntimeError(
             f"书籍文件过大: {file_size_mb:.1f} MB > 上限 {args.max_file_size_mb} MB。"
-            "超大文本须先切片, 再对每个切片分别调用 ainsert (分批构建), 见 §8 风险表。"
+            "超大文本须先切片, 再对每个切片分别调用 ainsert (分批构建), 见 §8 风险 #13。"
         )
 
-    # 书籍内容读取: 显式指定 utf-8 (Linux 默认亦为 utf-8, 双保险)
+    # 书籍内容读取: 显式指定 utf-8 (双保险)
     content = args.txt.read_text(encoding="utf-8")
     if not content.strip():
         raise ValueError(f"书籍文件为空: {args.txt}")
@@ -369,7 +402,7 @@ async def main() -> None:
     rag = build_rag(args.book)
     await rag.initialize_storages()
     try:
-        # 1.5.5 新签名: split_by_character 可控制分块; 默认即可
+        # 1.5.6 新签名: split_by_character 可控制分块; 默认即可
         await rag.ainsert(content)
     finally:
         await rag.finalize_storages()
@@ -511,7 +544,7 @@ def build_rag_system_prompt(user_system_prompt: str) -> str:
 
     背景: LightRAG 的 kg_query 会对传入的 system_prompt 强制调用
           `str.format(response_type=..., user_prompt=..., context_data=...)`
-          (见 lightrag/operate.py)。
+          (见 lightrag/operate.py:4288-4293)。
     因此必须:
       1. 把用户原文的 { } 转义为 {{ }}, 否则会被 format 当作占位符,
          要么吞掉检索上下文, 要么抛 KeyError;
@@ -724,7 +757,7 @@ async def chat_completions(req: ChatRequest) -> Any:
         query = _extract_last_user_query(req.messages)
         rag_system_prompt = build_rag_system_prompt(user_system_prompt)
 
-        # ---- 3. LightRAG 查询 (hybrid 模式) ----
+        # ---- 3. LightRAG 查询 (hybrid 模式; 不依赖 1.5.6 的默认 mix) ----
         param = QueryParam(mode="hybrid", stream=req.stream)
         result = await rag.aquery(query, param=param, system_prompt=rag_system_prompt)
 
@@ -750,30 +783,34 @@ if __name__ == "__main__":
 
 ---
 
-## 6. WSL2 专项执行清单（Linux）
+## 6. 执行清单（WSL2 Ubuntu，myenv 环境）
+
+> 前置确认：当前已在 WSL2 Ubuntu。conda 环境 `myenv` 现为 Python 3.14.6（2026-08 实测）。项目根 `/home/tessier/Archailect` 位于 Linux 原生路径，性能无忧。
 
 ```bash
-# 0. 前置: 安装 WSL2 + Ubuntu, 启动后进入
-#    建议项目放在 Linux 原生路径, 避免 /mnt/c 性能问题
+# 0. 激活目标 conda 环境 (myenv)
+conda activate myenv
 
-# 1. 安装 Python (>=3.10) 与 conda (可选)
-#    若用 conda:
-conda create -n novel-rag python=3.11 -y
-conda activate novel-rag
+# 1. 确认 Python 版本 (>=3.10 即可; 3.14 见 §8 风险 #2)
+python --version
 
-# 2. 创建项目
-mkdir -p ~/my-novel-rag/src ~/my-novel-rag/data ~/my-novel-rag/storage
-# 将 plan.md 中的代码落盘为对应文件:
-#   requirements.txt / .gitignore / .env.example / src/__init__.py
-#   src/config.py / src/builder.py / src/api_server.py
+# 2. 项目文件 (本 plan 落盘后应已就绪)
+#    需创建: requirements.txt / .gitignore / .env.example / src/__init__.py
+#            src/config.py / src/builder.py / src/api_server.py / data/.gitkeep
+#    若以上文件尚不存在, 按 §5 参考代码逐一落盘
 
 # 3. 安装依赖
-cd ~/my-novel-rag
+#    优先使用本地 wheel 安装 lightrag-hku 1.5.6 (已备于 /tmp/lr_1_5_6/)
+pip install /tmp/lr_1_5_6/lightrag_hku-1.5.6-py3-none-any.whl
 pip install -r requirements.txt
+#    若本地 wheel 缺失或安装失败, 回退到 PyPI:
+#    pip install lightrag-hku==1.5.6 openai>=2.0,<3.0
 
 # 4. 配置环境变量
 cp .env.example .env
-# 编辑 .env, 填入 DEEPSEEK_API_KEY (必填)
+# 编辑 .env:
+#   - DEEPSEEK_API_KEY: 必填
+#   - EMBEDDING_*: 框架阶段为占位值即可; 真实建图前必须替换为有效 embedding API
 
 # 5. 放置书籍 txt 到 data/ 目录
 
@@ -824,6 +861,8 @@ curl -sN http://localhost:8000/v1/chat/completions \
 | 8 | 同一 model 并发首访 | 多个并发请求同时首次访问同一 model，仅实例化一次，无报错、无重复初始化（per-model 锁） |
 | 9 | LRU 淘汰不中断在途查询 | 并发请求 A 查询中，其余请求触发淘汰，A 的实例不因淘汰而 `finalize`，回答正常返回 |
 | 10 | 流式中断 (客户端断开) | 中断后服务不抛未处理异常，其余请求不受影响，日志无 `CancelledError` 泄漏 |
+| 11 | Prompt 含 `{}` 字符 | 系统提示词含 JSON 示例/正则 `{...}` 时不抛 `KeyError`，转义 + 模板包装生效（§3.4） |
+| 12 | QueryParam 显式 mode | 请求 `mode="hybrid"` 生效；不因 1.5.6 默认 `mix` 造成行为漂移 | 
 
 ---
 
@@ -831,31 +870,41 @@ curl -sN http://localhost:8000/v1/chat/completions \
 
 | # | 风险 | 影响 | 对策 |
 |---|---|---|---|
-| 1 | `lightrag-hku` 升级 API 变动 | 代码失效 | **锁死 1.5.5**；升级前先对照源码重新验证 `LightRAG` 字段、`ainsert`、`aquery`、`QueryParam`、`openai_*` 签名 |
-| 2 | Embedding 定案后 | 旧图无向量，hybrid 效果打折 | **必须重新建图**（`rm -rf storage/{book}` 后重跑 builder）；因此建议**先定 embedding 再正式建图** |
-| 3 | LightRAG 实例跨事件循环复用 | asyncio 报错 | 实例在 FastAPI 事件循环内懒加载缓存；若未来改多 worker，需进程级隔离或每请求新建 |
-| 4 | System Prompt 含 `{}` | `.format()` KeyError | 已实现转义 + 模板包装（§5.5 `build_rag_system_prompt`），不可移除 |
-| 5 | `/mnt/c` 上建图性能差 | 慢 | 项目放 Linux 原生路径 `~/my-novel-rag` |
-| 6 | Windows 编码 | 中文乱码 | 所有 `open()` 显式 `encoding='utf-8'`（已写死在代码） |
-| 7 | `storage/` 撑爆 git | 仓库膨胀 | `.gitignore` 强制忽略 `/storage/` |
-| 8 | DeepSeek 计费 | 建图耗时耗 token | 建图前用短文本试跑一次 `--book test` 验证链路后再全量 |
-| 9 | 实例缓存内存膨胀 (多书 OOM) | 内存耗尽 | LRU 上限 `RAG_CACHE_MAX=8`（可配），**只淘汰引用计数为 0 的实例**（§5.5 `_evict_if_needed`），防止中断在途查询 |
-| 10 | 并发首访重复实例化/文件锁冲突 | 重复初始化、脏数据 | per-model `asyncio.Lock()` + 双重检查（§5.5 `_get_rag_instance`） |
-| 11 | 客户端断开流式中断 | 底层 LLM 连接未清理 | `_stream_response` 显式捕获 `CancelledError` + `asyncio.shield()` 关闭生成器（§5.5） |
-| 12 | 超大体积单体文本建图 OOM | 内存峰值、进程被杀 | builder 默认 200MB 上限 + 明确报错（防呆）；**正解**：超大文本须预切片，对每个切片分别 `ainsert`（可传 `track_id` 合并文档状态），分批完成建图 |
+| 1 | `lightrag-hku` 升级 API 变动 | 代码失效 | **锁死 1.5.6**；升级前先对照源码重新验证 `LightRAG` 字段、`ainsert`、`aquery`、`QueryParam`、`openai_*` 签名 |
+| 2 | **Python 3.14 兼容性（本项目最大未知数）** | myenv 为 Python 3.14.6，1.5.6 官方要求 >=3.10 但依赖链未实车验证 3.14 | 安装时若 numpy/pandas/pydantic 等解析失败或运行时异常：**回退方案** `conda create -n novel-rag python=3.11` 新环境重装；不强行在 3.14 上打补丁 |
+| 3 | 占位 embedding 配置 + 误触发建图 | 对无效 API 发起真实请求，报 401/连接错误（Fail-Fast，不产生假数据） | 框架阶段只做实例化/启动，不执行 `ainsert`；建图前必须将 `EMBEDDING_*` 替换为有效配置。更换 embedding 模型后**必须重新建图**（`rm -rf storage/{book}` 后重跑 builder） |
+| 4 | LightRAG 实例跨事件循环复用 | asyncio 报错 | 实例在 FastAPI 事件循环内懒加载缓存；若未来改多 worker，需进程级隔离或每请求新建 |
+| 5 | System Prompt 含 `{}` | `.format()` KeyError | 已实现转义 + 模板包装（§5.5 `build_rag_system_prompt`），不可移除（operate.py:4288 强制 format） |
+| 6 | `/mnt/c` 上建图性能差 | 慢 | 项目已放 Linux 原生路径 `~/Archailect`（WSL2 内），已满足 |
+| 7 | 文件编码 | 中文乱码 | 所有 `open()` 显式 `encoding='utf-8'`（已写死在代码） |
+| 8 | `storage/` 撑爆 git | 仓库膨胀 | `.gitignore` 强制忽略 `/storage/` |
+| 9 | DeepSeek 计费 | 建图耗时耗 token | 建图前用短文本试跑一次 `--book test` 验证链路后再全量 |
+| 10 | 实例缓存内存膨胀 (多书 OOM) | 内存耗尽 | LRU 上限 `RAG_CACHE_MAX=8`（可配），只淘汰引用计数为 0 的实例（§5.5 `_evict_if_needed`），防止中断在途查询 |
+| 11 | 并发首访重复实例化/文件锁冲突 | 重复初始化、脏数据 | per-model `asyncio.Lock()` + 双重检查（§5.5 `_get_rag_instance`） |
+| 12 | 客户端断开流式中断 | 底层 LLM 连接未清理 | `_stream_response` 显式捕获 `CancelledError` + `asyncio.shield()` 关闭生成器（§5.5） |
+| 13 | 超大体积单体文本建图 OOM | 内存峰值、进程被杀 | builder 默认 200MB 上限 + 明确报错（防呆）；超大文本须预切片，对每个切片分别 `ainsert`（可传 `track_id` 合并文档状态），分批完成建图 |
+| 14 | **1.5.5→1.5.6 默认 behavior 变化** | 依赖默认值会得到非预期检索模式 | 1.5.6 `QueryParam.mode` 默认 `"mix"`（1.5.5 为 `"hybrid"`）；查询代码必须显式传 `mode="hybrid"`（已落实 §5.5） |
+| 15 | **openai 库版本误配** | import 失败 | requirements 显式 `openai>=2.0,<3.0`（1.5.6 api extra 约束；`lightrag.llm.openai` 顶层导入） |
+| 16 | **1.5.6 强制 embedding（相对旧版最大行为差异）** | `embedding_func=None` 时实例化即抛 `ValueError`；旧 plan「无 embedding 可跑纯关键词」假设失效 | `build_embedding_func()` 始终构造 `EmbeddingFunc`；框架阶段 `.env` 用占位值，真实建图前替换为有效 embedding API（本表风险 #3） |
 
 ---
 
 ## 9. 交付物清单（最终完成标准）
 
-- [ ] `my-novel-rag/.gitignore`（含 `/storage/`）
-- [ ] `my-novel-rag/requirements.txt`（`lightrag-hku==1.5.5`）
-- [ ] `my-novel-rag/.env.example`
-- [ ] `my-novel-rag/src/__init__.py`
-- [ ] `my-novel-rag/src/config.py`
-- [ ] `my-novel-rag/src/builder.py`
-- [ ] `my-novel-rag/src/api_server.py`
-- [ ] `my-novel-rag/data/` 内放置书籍 txt
+**阶段一：框架就绪（当前目标）**
+- [ ] `Archailect/.gitignore`（含 `/storage/`）
+- [ ] `Archailect/requirements.txt`（`lightrag-hku==1.5.6` + `openai>=2.0,<3.0`）
+- [ ] `Archailect/.env.example`（`EMBEDDING_*` 为占位值）
+- [ ] `Archailect/src/__init__.py`
+- [ ] `Archailect/src/config.py`
+- [ ] `Archailect/src/builder.py`
+- [ ] `Archailect/src/api_server.py`
+- [ ] `Archailect/data/` 放置书籍 txt 的 `.gitkeep`
+- [ ] `myenv` 环境安装成功（lightrag-hku 1.5.6 / fastapi / uvicorn / openai / python-dotenv）
+- [ ] 框架冒烟：`LightRAG` 实例化 + `QueryParam` 正常（不触发 embedding API 调用）
+
+**阶段二：真实建图与验收（需真实 embedding API，另行执行）**
+- [ ] `.env` 的 `EMBEDDING_*` 替换为有效配置
 - [ ] 至少一本书完成建图（`storage/{book}/` 存在）
 - [ ] 服务启动成功，`/healthz` 返回 ok
 - [ ] §7 全部测试要点通过
