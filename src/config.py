@@ -30,10 +30,10 @@ def _require_env(name: str) -> str:
     return value
 
 
-# ---- LLM (ds v4 flash, cherryin 网关) ----
+# ---- LLM (DeepSeek v4-flash, DeepSeek 官方 API) ----
 DEEPSEEK_API_KEY = _require_env("DEEPSEEK_API_KEY")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://open.cherryin.ai/v1")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek/deepseek-v4-flash")
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 
 async def _llm_wrapper(
@@ -65,13 +65,14 @@ def build_llm_func():
     """返回 LightRAG 可直接用作 llm_model_func 的绑定函数."""
     return partial(_llm_wrapper)
 
-# ---- Embedding (Qwen3-Embedding-8B, cherryin 网关) ----
+# ---- Embedding (Qwen3-Embedding-0.6B 免费档, cherryin 网关) ----
 EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "https://open.cherryin.ai/v1")
-# LLM 与 Embedding 共用同一 cherryin key; EMBEDDING_API_KEY 缺省时回退 DEEPSEEK_API_KEY.
-# 独立设置 EMBEDDING_API_KEY 仅用于未来 embedding 与 LLM 走不同 provider.
+# 当前 LLM (DS 官方) 与 Embedding (cherryin) 为不同 provider:
+# EMBEDDING_API_KEY 缺省时回退 DEEPSEEK_API_KEY 已不适用 (DS key 在 cherryin 会 401),
+# 必须在 .env 显式设置 EMBEDDING_API_KEY (cherryin key).
 EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", DEEPSEEK_API_KEY)
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "qwen/qwen3-embedding-8b")
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "4096"))
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "qwen/qwen3-embedding-0.6b(free)")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 EMBEDDING_MAX_TOKEN_SIZE = int(os.getenv("EMBEDDING_MAX_TOKEN_SIZE", "32768"))
 
 

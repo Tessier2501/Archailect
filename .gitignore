@@ -10,3 +10,6 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+
+# 诊断日志 (debug_server 落盘)
+/logs/

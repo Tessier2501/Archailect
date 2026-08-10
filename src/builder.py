@@ -36,9 +36,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_rag(book: str) -> LightRAG:
-    """为单本书构造独立 LightRAG 实例. working_dir 指向 storage/{book}."""
+    """为单本书构造独立 LightRAG 实例. working_dir 指向 storage/{book}.
+
+    workspace=book: 多库共享内存缓存按 (namespace, workspace) 寻址,
+    不传时所有实例 workspace 均为 "", 内存缓存互相覆盖导致串台 (已实测).
+    注意: workspace 非空会使存储文件路径变为 storage/{book}/{book}/.
+    建图 (builder) 与查询 (api_server) 必须传相同 workspace, 保持一致.
+    """
     return LightRAG(
         working_dir=str(STORAGE_DIR / book),
+        workspace=book,
         llm_model_func=build_llm_func(),
         embedding_func=build_embedding_func(),
     )

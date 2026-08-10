@@ -105,12 +105,15 @@ async def _get_rag_instance(model: str) -> LightRAG:
 
         rag = LightRAG(
             working_dir=str(storage_dir),
+            workspace=model,
             llm_model_func=build_llm_func(),
             embedding_func=build_embedding_func(),
         )
         # 与 builder.py 一致: 显式初始化 pipeline_status 与各 storage.
         # 缺失会导致查询路径 async with None (pipeline_status_lock 未初始化),
         # 已实测: 建图成功但查询报 "NoneType does not support async context manager".
+        # workspace=model: 与 builder (workspace=book) 对齐, 共享内存缓存按
+        # (namespace, workspace) 隔离, 否则多库实例共用 "" 命名空间互相覆盖 (已实测串台).
         await rag.initialize_storages()
         _rag_instances[model] = rag
         _rag_refcounts[model] = 0

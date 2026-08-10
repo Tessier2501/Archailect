@@ -4,6 +4,7 @@
 > 实施环境: WSL2 Ubuntu, conda 环境 myenv (Python 3.14.6), 目标路径 ~/Archailect (Linux 原生路径).
 > 权威代码: 全部实现以 src/ 目录下的源码为准, 本文档不内嵌参考代码, 以避免文档与源码漂移.
 > 更新记录: 2026-08-09 全链路验证通过 (主模型切 DS 官方, 嵌入切 qwen3-embedding-0.6b(free), 测试建图+端到端查询成功); Cherry Studio 接入指南并入 §5.3.
+> 更新记录: 2026-08-10 Cherry Studio (Windows 宿主) 全链路验证通过 (连通性 404 判读 + 真实问答双确认); 新增长期诊断服务 src/debug_server.py (model=debug, 独立 8001 端口, 见 §5.1.1), 日志持久化到 logs/.
 
 ---
 
@@ -175,6 +176,7 @@ async def openai_complete_if_cache(
 3. **DeepSeek v4-flash 是推理模型**: 官方 API 返回 reasoning_content (thinking); 非流式 aquery 只拿 content (不含 thinking), 但流式 SSE 会原样透传 `<think>...</think>` 推理帧. 若前端不需 thinking, 需在响应层过滤.
 4. **DeepSeek 官方 API 模型名不带 "deepseek/" 前缀**: cherryin 网关用 "deepseek/deepseek-v4-flash", 官方 API 只认 "deepseek-v4-flash"/"deepseek-v4-pro" (带前缀实测 HTTP 400).
 5. **EMBEDDING_DIM 必须与实际模型维度一致**: 实测 qwen3-embedding-0.6b 返回 1024 维 (4b=2560, 8b=4096). 误设 1536 (OpenAI ada-002 默认) 会导致 nano-vectordb 维度校验失败. 更换 embedding 模型必须重建索引 (§7 #2).
+6. **多库共享内存缓存串扰 (workspace 隔离)**: LightRAG 1.5.6 的存储磁盘路径按 working_dir 隔离, 但进程内共享内存缓存/锁按 `(namespace, workspace)` 寻址; workspace 默认取 WORKSPACE 环境变量, 不传为空字符串 "". 多库实例若不传 workspace 共用 "" 命名空间, LLM 响应缓存互相覆盖, 交替查询出现双向串扰 (已实测: test2 被 test 覆盖成 Joel Kita, 反之亦然). 修复: 建图 (builder workspace=book) 与查询 (api_server workspace=model) 两侧必须传相同 workspace; 副作用是存储路径多嵌一层 workspace, 变为 storage/{book}/{book}/, 现有索引需重建.
 
 ---
 
@@ -193,15 +195,20 @@ async def openai_complete_if_cache(
 │   ├── __init__.py
 │   ├── config.py             # 环境变量 + LLM/Embedding 工厂
 │   ├── builder.py            # 离线建图 (支持多 --txt 合并同一 book)
-│   └── api_server.py         # FastAPI 主服务
+│   ├── api_server.py         # FastAPI 主服务
+│   ├── debug_server.py       # 长期诊断服务 (model=debug, 独立 8001 端口, 与主服务隔离)
+│   └── dual_probe.py         # 双库隔离受控实验 (交替查询 test/test2, 记录答案与耗时)
 ├── data/                     # 原始 txt 书籍
 │   ├── 1 - Starfish - Peter Watts.txt
 │   ├── 2 - Behemoth - Peter Watts.txt
-│   └── 3 - Maelstrom - Peter Watts.txt
+│   ├── 3 - Maelstrom - Peter Watts.txt
+│   ├── test-sample.txt       # 测试用切片 (Starfish 前 250 行; 全量建图完成前保留)
+│   └── test2-sample.txt      # 测试用切片 (Maelstrom 前 250 行; 双库对照用)
 └── storage/                  # LightRAG 索引 (git 忽略) storage/{book}/
 ```
 
-注意: 建图实验产物 data/test-sample.txt 与 storage/test/ 已完成使命已删除; 全量建库用 rifters 后目录变为 storage/rifters/.
+存储路径注意: workspace 非空后索引位于 storage/{book}/{book}/ (如 storage/test/test/, storage/test2/test2/); storage/{book} 外层为工作目录, 内层为 workspace 数据.
+状态: storage/test/、storage/test2/ (测试库) 与 data/test-sample.txt、data/test2-sample.txt (切片) 当前保留, 供 Cherry Studio 双库对照验证; 全量建库用 rifters 后目录变为 storage/rifters/rifters/.
 
 ---
 
@@ -214,7 +221,19 @@ async def openai_complete_if_cache(
 - 测试文本建图实验成功: 250 行切片 -> 51 entities / 73 relations, 索引完整 (graphml + kv_store_* + vdb_*.json), 日志无 "Failed to extract".
 - 端到端查询验收全通: 非流式/流式 SSE/System Prompt 透传/404 错误结构/模型列表/健康检查, 详见 §6.
 - 已修复两个代码缺陷: config.py load_dotenv(override=True); api_server.py 构造后 await initialize_storages().
+- Cherry Studio 接入验证: 404 判读为链路通 + 真实问答成功 (model=test 回答准确列举知识库实体/关系/文档片段, 无编造), 详见 §6.
+- 双库隔离修复: 2026-08-10 发现 workspace 串扰 (双向), 已通过 builder/api_server 传 workspace 修复, test/test2 重建后 12 轮实验零串扰 (见 §3.9 #6).
+- 调试脚本: src/dual_probe.py 用于双库隔离受控实验 (交替查询记录答案与耗时, 判定缓存串扰 vs LLM 幻觉); src/debug_server.py 为长期诊断服务 (8001).
 - 待办: storage/rifters 全量建库 (三卷合并, 约 2.1MB 文本), 见 5.2 执行清单第 6 步.
+
+### 5.1.1 调试服务 (长期诊断工具, 独立 8001 端口)
+
+- 文件: src/debug_server.py, 独立监听 8001 端口, 不影响主服务 (8000); 与生产路由完全隔离.
+- 用途: 验证前端实际发送的 model 字段 / System Prompt (role=system 消息) / 消息结构 / stream 标志; 排查多库路由与系统提示词透传问题.
+- 每次请求: 完整记录到 logs/debug_requests.log (git 忽略, ensure_ascii=False) + 以 OpenAI 格式将请求体回显到对话窗.
+- 零 token 成本: 不调用 LLM/Embedding, 常驻无负担.
+- Cherry Studio: 添加第二个服务商指向 http://localhost:8001/v1, 模型 ID 填 debug.
+- 运行: python -m src.debug_server.
 
 ### 5.2 执行清单
 
@@ -285,10 +304,10 @@ curl -sN http://localhost:8000/v1/chat/completions \
 
 | # | 验证项 | 预期 | 状态 (2026-08-09) |
 |---|---|---|---|
-| 1 | POST /v1/chat/completions (非流式) | OpenAI 规范 JSON, choices[0].message.content 为回答 | ✅ 实测通过 (基于测试库, 回答与文本吻合) |
-| 2 | 同上 + stream:true | SSE 分块输出, 结尾 data: [DONE] | ✅ 实测通过 (798 帧 + [DONE]) |
-| 3 | System Prompt 透传 | 问: "根据我给你的设定, 你是谁?" 回答与设定一致 | ✅ 实测通过 (设定"深渊向导"后自报身份) |
-| 4 | 多书隔离 | 不同 model 提问互不串台 | ⏳ 待多库场景验收 |
+| 1 | POST /v1/chat/completions (非流式) | OpenAI 规范 JSON, choices[0].message.content 为回答 | ✅ 通过 (curl + Cherry Studio 真实问答) |
+| 2 | 同上 + stream:true | SSE 分块输出, 结尾 data: [DONE] | ✅ 通过 (curl 798 帧; Cherry Studio 默认流式无错) |
+| 3 | System Prompt 透传 | 问: "根据我给你的设定, 你是谁?" 回答与设定一致 | ✅ 通过 (curl"深渊向导"已验; Cherry Studio 端可用 debug 回显观测) |
+| 4 | 多书隔离 | 不同 model 提问互不串台 | ✅ 通过 (test=Joel Kita, test2=Mermaid, 12 轮实验零串扰, workspace 隔离修复后) |
 | 5 | 不存在的 model | 404 语义错误且为 OpenAI error 结构 | ✅ 实测通过 (type=invalid_request_error, code=model_not_found) |
 | 6 | GET /healthz | {"status":"ok"} | ✅ 实测通过 |
 | 7 | GET /v1/models | 列出 storage 下已建库目录名 | ✅ 实测通过 (列出 test) |
