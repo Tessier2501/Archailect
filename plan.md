@@ -2,7 +2,8 @@
 
 > 交接对象: 任一后续 agent. 请先完整阅读本文档, 再按执行清单逐步实施.
 > 实施环境: WSL2 Ubuntu, conda 环境 myenv (Python 3.14.6), 目标路径 ~/Archailect (Linux 原生路径).
-> 权威代码: 全部实现以 src/ 目录下的源码为准. 本文档不内嵌参考代码, 以避免文档与源码漂移.
+> 权威代码: 全部实现以 src/ 目录下的源码为准, 本文档不内嵌参考代码, 以避免文档与源码漂移.
+> 更新记录: 2026-08-09 全链路验证通过 (主模型切 DS 官方, 嵌入切 qwen3-embedding-0.6b(free), 测试建图+端到端查询成功); Cherry Studio 接入指南并入 §5.3.
 
 ---
 
@@ -10,11 +11,11 @@
 
 构建一个多本书独立隔离的书籍知识库问答后端:
 
-- 前端: 使用标准 OpenAI 接口格式的 LLM 平台.
+- 前端: 使用标准 OpenAI 接口格式的 LLM 平台 (本机 Windows 侧 Cherry Studio).
 - 后端: FastAPI + Uvicorn, 暴露 POST /v1/chat/completions.
 - RAG 引擎: lightrag-hku (锁定 1.5.6).
-- LLM: 占位符
-- Embedding: 占位符
+- LLM: DeepSeek v4-flash (DeepSeek 官方 API, 推理模型).
+- Embedding: Qwen3-Embedding-0.6B 经 cherryin 网关 (免费档).
 
 三大核心功能:
 
@@ -62,7 +63,7 @@ venv/
 - @dataclass class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin) (lightrag.py 第 385 行).
 - 构造参数全部为类字段.
 - 关键字段: working_dir, llm_model_func, llm_model_name, llm_model_kwargs, embedding_func (lightrag.py 第 617-722 行).
-- initialize_storages (第 1556 行) / finalize_storages (第 1644 行) 存在; 代码中显式调用.
+- initialize_storages (第 1556 行) / finalize_storages (第 1644 行) 存在; 代码中显式调用. **查询前必须调用 initialize_storages, 否则查询路径 pipeline_status_lock 为 None, 报 "NoneType does not support async context manager", 见 §3.9.**
 
 ### 3.2 ainsert 签名
 
@@ -115,7 +116,7 @@ sys_prompt = sys_prompt_temp.format(
 
 1. 直接传用户 System Prompt 原文且不含 {context_data} 占位符 -> 检索上下文丢失.
 2. 原文若含任意 {...} (如 JSON 示例, 正则) -> .format() 抛 KeyError/IndexError.
-3. 正确做法: 服务端先把用户原文的 { 转义为 {{, } 转义为 }}, 再包装成含 {response_type}/{user_prompt}/{context_data} 占位符的模板传入 aquery(system_prompt=模板).
+3. 正确做法: 服务端先把用户原文的 { 转义为 {{, } 转义为 }}, 再包装成含 {response_type}/{user_prompt}/{context_data} 占位符的模板传入 aquery(system_prompt=模板), 实现见 src/api_server.py build_rag_system_prompt().
 
 ### 3.5 QueryParam 关键字段
 
@@ -167,6 +168,14 @@ async def openai_complete_if_cache(
 - aquery 已解包 aquery_llm 的返回 dict (第 3666-3674 行), 业务侧直接用 aquery.
 - aquery_data 返回结构化检索结果, 本项目暂不启用.
 
+### 3.9 实测陷阱 (2026-08-09 全链路验证中发现)
+
+1. **initialize_storages() 缺失导致查询全面失败**: LightRAG 构造后若未调用 initialize_storages(), pipeline_status/lock 等基础设施未初始化, 查询路径 `async with None` 抛 "NoneType object does not support the asynchronous context manager protocol", 且 aquery_llm 内部吞掉异常返回失败 dict, api_server 把 str(None) 当回答返回 "None". builder 因显式调用过 initialize_storages 而建图正常, 与 api_server 形成反差. **所有实例构造后必须 await initialize_storages().**
+2. **load_dotenv() 默认不覆盖已存在环境变量**: shell 中 source .env 残留的旧 DEEPSEEK_MODEL 会遮蔽 .env 新值, 导致修改 .env 不生效 (实测旧 "deepseek/" 前缀导致建图 400). src/config.py 已改为 load_dotenv(override=True).
+3. **DeepSeek v4-flash 是推理模型**: 官方 API 返回 reasoning_content (thinking); 非流式 aquery 只拿 content (不含 thinking), 但流式 SSE 会原样透传 `<think>...</think>` 推理帧. 若前端不需 thinking, 需在响应层过滤.
+4. **DeepSeek 官方 API 模型名不带 "deepseek/" 前缀**: cherryin 网关用 "deepseek/deepseek-v4-flash", 官方 API 只认 "deepseek-v4-flash"/"deepseek-v4-pro" (带前缀实测 HTTP 400).
+5. **EMBEDDING_DIM 必须与实际模型维度一致**: 实测 qwen3-embedding-0.6b 返回 1024 维 (4b=2560, 8b=4096). 误设 1536 (OpenAI ada-002 默认) 会导致 nano-vectordb 维度校验失败. 更换 embedding 模型必须重建索引 (§7 #2).
+
 ---
 
 ## 4. 目录结构
@@ -192,15 +201,20 @@ async def openai_complete_if_cache(
 └── storage/                  # LightRAG 索引 (git 忽略) storage/{book}/
 ```
 
+注意: 建图实验产物 data/test-sample.txt 与 storage/test/ 已完成使命已删除; 全量建库用 rifters 后目录变为 storage/rifters/.
+
 ---
 
 ## 5. 建图与运行
 
-### 5.1 当前状态
+### 5.1 当前状态 (2026-08-09 实测)
 
-- 建图尝试已失败: cherryin 响应慢触发 LightRAG 提取 worker 480s 超时 (15 次 TimeoutError), 文档提取被放弃, 索引残缺.
-- 已在 .env 追加 LLM_TIMEOUT=900 解决超时上限; 失败进程已终止, storage/rifters 已清空待重跑.
-- 重跑命令见 5.2 执行清单第 6 步; 完成后需验证: storage/rifters 下索引完整 (含 entities/relations/graphml) 且日志无 "Failed to extract". 准备更换llm和embedding提供商. 当前在文档中使用占位符占位.
+- 主模型已切 DeepSeek 官方 API: DEEPSEEK_BASE_URL=https://api.deepseek.com, DEEPSEEK_MODEL=deepseek-v4-flash (官方模型名, 不带 "deepseek/" 前缀).
+- 嵌入模型已切 qwen3-embedding-0.6b(free) (cherryin 免费档, 1024 维), EMBEDDING_DIM=1024.
+- 测试文本建图实验成功: 250 行切片 -> 51 entities / 73 relations, 索引完整 (graphml + kv_store_* + vdb_*.json), 日志无 "Failed to extract".
+- 端到端查询验收全通: 非流式/流式 SSE/System Prompt 透传/404 错误结构/模型列表/健康检查, 详见 §6.
+- 已修复两个代码缺陷: config.py load_dotenv(override=True); api_server.py 构造后 await initialize_storages().
+- 待办: storage/rifters 全量建库 (三卷合并, 约 2.1MB 文本), 见 5.2 执行清单第 6 步.
 
 ### 5.2 执行清单
 
@@ -218,12 +232,13 @@ pip install /tmp/lr_1_5_6/lightrag_hku-1.5.6-py3-none-any.whl
 pip install -r requirements.txt
 
 # 4. 配置环境变量 (.env 已存在且含真实配置; 新环境按如下键名手动创建):
-#   - DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
-#   - EMBEDDING_BASE_URL, EMBEDDING_API_KEY, EMBEDDING_MODEL
-#   - EMBEDDING_DIM=4096, EMBEDDING_MAX_TOKEN_SIZE=32768
-#   - LLM_TIMEOUT=900 (lightrag-hku 读取, 默认 240; cherryin 响应慢时需调大, 否则建图提取 worker 480s 超时失败)
+#   - DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL=https://api.deepseek.com, DEEPSEEK_MODEL=deepseek-v4-flash
+#   - EMBEDDING_BASE_URL=https://open.cherryin.ai/v1, EMBEDDING_API_KEY, EMBEDDING_MODEL=qwen/qwen3-embedding-0.6b(free)
+#   - EMBEDDING_DIM=1024, EMBEDDING_MAX_TOKEN_SIZE=32768
+#   - LLM_TIMEOUT=900 (lightrag-hku 读取, 默认 240; 建图曾因 cherryin 响应慢触发 480s worker 超时失败, 需调大)
 #   - RAG_CACHE_MAX=8
-#   - 模型 ID: deepseek/deepseek-v4-flash 与 qwen/qwen3-embedding-8b
+#   注意: DEEPSEEK_MODEL 不带 "deepseek/" 前缀 (官方 API 只认 deepseek-v4-flash/deepseek-v4-pro);
+#         EMBEDDING_DIM 必须与实际模型维度一致 (0.6b=1024), 否则 nano-vectordb 维度校验失败.
 
 # 5. 放置书籍 txt 到 data/ 目录 (已有 Rifters 三卷)
 
@@ -231,21 +246,24 @@ pip install -r requirements.txt
 python -m src.builder --txt "data/1 - Starfish - Peter Watts.txt" \
                       --txt "data/2 - Behemoth - Peter Watts.txt" \
                       --txt "data/3 - Maelstrom - Peter Watts.txt" --book rifters
+# 完成后验证: storage/rifters/ 索引完整 (graphml + kv_store_* + vdb_*.json) 且日志无 "Failed to extract"
 
-# 7. 启动服务
+# 7. 启动服务 (正式运行建议去掉 reload; 当前 __main__ 已改为 reload=False)
 python -m src.api_server
 # 默认 0.0.0.0:8000
 ```
 
-### 前端 LLM 平台接入
+### 5.3 前端 LLM 平台接入 (Cherry Studio, Windows 宿主)
 
-1. 设置 -> 接入提供方 -> 添加自定义 OpenAI 兼容服务商.
-2. API 地址: http://localhost:8000/v1 (远程则填服务器 IP/域名).
-3. API Key: 任意占位字符串 (此服务不做鉴权).
-4. 模型名: 填 rifters (storage 下已建库目录名).
-5. 在该模型的系统提示词中填写任意系统提示词, 验证透传生效.
+1. 确保后端已启动: `python -m src.api_server` (监听 0.0.0.0:8000).
+2. Cherry Studio: 设置 -> 模型服务 -> 添加服务商 -> 选 OpenAI 兼容 (自定义).
+3. API 地址: `http://localhost:8000/v1` (WSL2 内置 localhost 转发; 若不通改用 VSCode 端口隧道或局域网 IP).
+4. API Key: 任意占位字符串 (此服务不做鉴权, 如 `my-novel-rag`).
+5. 模型 ID: 填 storage 下已建库目录名 (如 rifters) — 一个知识库 = 一个模型 ID, 这是多书路由的关键.
+6. 在该模型的系统提示词中填写任意系统提示词, 验证透传生效.
+7. 验证: 提问书籍相关问题 (如 "介绍一下主要角色"); 流式回复会含 `<think>...</think>` 推理内容 (DS v4-flash 特性), 非流式没有.
 
-### 冒烟测试 (curl)
+冒烟测试 (curl):
 
 ```bash
 # 非流式
@@ -259,24 +277,26 @@ curl -sN http://localhost:8000/v1/chat/completions \
   -d '{"model":"rifters","stream":true,"messages":[{"role":"user","content":"这本书讲了什么"}]}'
 ```
 
+安全注意: 本服务无鉴权, 仅限本机/VSCode 转发使用. 如需局域网远程访问, 建议前置鉴权或绑定 127.0.0.1 + 反向代理.
+
 ---
 
 ## 6. 测试要点 (验收依据)
 
-| # | 验证项 | 预期 |
-|---|---|---|
-| 1 | POST /v1/chat/completions (非流式) | OpenAI 规范 JSON, choices[0].message.content 为回答 |
-| 2 | 同上 + stream:true | SSE 分块输出, 结尾 data: [DONE] |
-| 3 | System Prompt 透传 | 问: "根据我给你的设定, 你是谁?" 回答与设定一致 |
-| 4 | 多书隔离 | 不同 model 提问互不串台 |
-| 5 | 不存在的 model | 404 语义错误且为 OpenAI error 结构 |
-| 6 | GET /healthz | {"status":"ok"} |
-| 7 | GET /v1/models | 列出 storage 下已建库目录名 |
-| 8 | 同一 model 并发首访 | 仅实例化一次, 无重复初始化 (per-model 锁) |
-| 9 | LRU 淘汰不中断在途查询 | 在途实例不被 finalize, 回答正常返回 |
-| 10 | 流式中断 (客户端断开) | 无未处理异常, 日志无 CancelledError 泄漏 |
-| 11 | Prompt 含 {} 字符 | 不抛 KeyError, 转义 + 模板包装生效 |
-| 12 | QueryParam 显式 mode | mode="hybrid" 生效; 不因默认 mix 漂移 |
+| # | 验证项 | 预期 | 状态 (2026-08-09) |
+|---|---|---|---|
+| 1 | POST /v1/chat/completions (非流式) | OpenAI 规范 JSON, choices[0].message.content 为回答 | ✅ 实测通过 (基于测试库, 回答与文本吻合) |
+| 2 | 同上 + stream:true | SSE 分块输出, 结尾 data: [DONE] | ✅ 实测通过 (798 帧 + [DONE]) |
+| 3 | System Prompt 透传 | 问: "根据我给你的设定, 你是谁?" 回答与设定一致 | ✅ 实测通过 (设定"深渊向导"后自报身份) |
+| 4 | 多书隔离 | 不同 model 提问互不串台 | ⏳ 待多库场景验收 |
+| 5 | 不存在的 model | 404 语义错误且为 OpenAI error 结构 | ✅ 实测通过 (type=invalid_request_error, code=model_not_found) |
+| 6 | GET /healthz | {"status":"ok"} | ✅ 实测通过 |
+| 7 | GET /v1/models | 列出 storage 下已建库目录名 | ✅ 实测通过 (列出 test) |
+| 8 | 同一 model 并发首访 | 仅实例化一次, 无重复初始化 (per-model 锁) | ⏳ 待并发验收 |
+| 9 | LRU 淘汰不中断在途查询 | 在途实例不被 finalize, 回答正常返回 | ⏳ 待并发验收 |
+| 10 | 流式中断 (客户端断开) | 无未处理异常, 日志无 CancelledError 泄漏 | ⏳ 待验收 |
+| 11 | Prompt 含 {} 字符 | 不抛 KeyError, 转义 + 模板包装生效 | ✅ 实现保证 (build_rag_system_prompt 转义) |
+| 12 | QueryParam 显式 mode | mode="hybrid" 生效; 不因默认 mix 漂移 | ✅ 实现保证 (显式传 hybrid) |
 
 ---
 
@@ -291,3 +311,8 @@ curl -sN http://localhost:8000/v1/chat/completions \
 | 5 | 多书 OOM 防护 | LRU 上限 RAG_CACHE_MAX=8, 只淘汰无在途请求的实例 |
 | 6 | 全量建图前 | 先用短文本试跑验证链路, 避免浪费 LLM token |
 | 7 | cherryin 响应慢导致建图超时 | 提取 worker 480s 超时失败 (已实测) | .env 设 LLM_TIMEOUT=900 调大超时上限 (lightrag-hku 读取该环境变量) |
+| 8 | LightRAG 实例查询前 | 必须 await initialize_storages(), 否则 async with None 查询失败 (已实测, 见 §3.9) |
+| 9 | 修改 .env 后不生效 | shell 残留同名环境变量会遮蔽 .env (load_dotenv 默认不覆盖); config.py 已用 override=True, 但 shell 手工 export 需谨慎 |
+| 10 | DS 官方 API 模型名 | 不带 "deepseek/" 前缀 (deepseek-v4-flash / deepseek-v4-pro); cherryin 前缀名在官方 API 报 400 (已实测) |
+| 11 | 推理模型 thinking | DS v4-flash 流式含 <think> 推理帧; 非流式 content 不含. 前端若需过滤 thinking, 在响应层处理 |
+| 12 | 服务无鉴权 | 仅限本机/VSCode 转发; 远程暴露需前置鉴权或绑定 127.0.0.1 + 反向代理 |

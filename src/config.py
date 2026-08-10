@@ -10,7 +10,9 @@ from dotenv import load_dotenv
 from lightrag.llm.openai import openai_complete_if_cache, openai_embed
 from lightrag.utils import EmbeddingFunc, wrap_embedding_func_with_attrs
 
-load_dotenv()
+# override=True: .env 是权威配置源. 默认不覆盖会导致 shell 残留同名
+# 环境变量 (如 source .env 后的旧值) 遮蔽 .env 的新配置, 已实测踩坑.
+load_dotenv(override=True)
 
 # ---- 路径 ----
 BASE_DIR = Path(__file__).resolve().parent.parent          # Archailect/
