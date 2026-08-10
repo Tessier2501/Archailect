@@ -196,8 +196,7 @@ async def openai_complete_if_cache(
 │   ├── config.py             # 环境变量 + LLM/Embedding 工厂
 │   ├── builder.py            # 离线建图 (支持多 --txt 合并同一 book)
 │   ├── api_server.py         # FastAPI 主服务
-│   ├── debug_server.py       # 长期诊断服务 (model=debug, 独立 8001 端口, 与主服务隔离)
-│   └── dual_probe.py         # 双库隔离受控实验 (交替查询 test/test2, 记录答案与耗时)
+│   └── debug_server.py       # 长期诊断服务 (model=debug, 独立 8001 端口, 与主服务隔离)
 ├── data/                     # 原始 txt 书籍
 │   ├── 1 - Starfish - Peter Watts.txt
 │   ├── 2 - Behemoth - Peter Watts.txt
@@ -223,7 +222,7 @@ async def openai_complete_if_cache(
 - 已修复两个代码缺陷: config.py load_dotenv(override=True); api_server.py 构造后 await initialize_storages().
 - Cherry Studio 接入验证: 404 判读为链路通 + 真实问答成功 (model=test 回答准确列举知识库实体/关系/文档片段, 无编造), 详见 §6.
 - 双库隔离修复: 2026-08-10 发现 workspace 串扰 (双向), 已通过 builder/api_server 传 workspace 修复, test/test2 重建后 12 轮实验零串扰 (见 §3.9 #6).
-- 调试脚本: src/dual_probe.py 用于双库隔离受控实验 (交替查询记录答案与耗时, 判定缓存串扰 vs LLM 幻觉); src/debug_server.py 为长期诊断服务 (8001).
+- 诊断服务: src/debug_server.py 为长期诊断服务 (model=debug, 独立 8001 端口). 用于排查多库路由与系统提示词透传问题; 曾有受控实验脚本 src/dual_probe.py 已随使命完成删除.
 - 待办: storage/rifters 全量建库 (三卷合并, 约 2.1MB 文本), 见 5.2 执行清单第 6 步.
 
 ### 5.1.1 调试服务 (长期诊断工具, 独立 8001 端口)
