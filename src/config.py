@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from dotenv import load_dotenv
 from lightrag.llm.openai import openai_complete_if_cache, openai_embed
+from lightrag.rerank import generic_rerank_api
 from lightrag.utils import EmbeddingFunc, wrap_embedding_func_with_attrs
 
 # override=True: .env 是权威配置源. 默认不覆盖会导致 shell 残留同名
@@ -178,6 +179,70 @@ _EXTRACT_CIRCUIT = _FallbackCircuit(
     FALLBACK_COOLDOWN, has_free=bool(EXTRACT_FREE_MODEL)
 )
 _EMBED_FALLBACK = _FallbackCircuit(FALLBACK_COOLDOWN, has_free=bool(EMBEDDING_MODEL_FREE))
+
+# ============================================================
+# Rerank (可选, 免费优先 + 付费兜底; 三键任一为空 = 不启用)
+# ============================================================
+RERANK_BASE_URL = _opt_env("RERANK_BASE_URL")
+RERANK_API_KEY = _opt_env("RERANK_API_KEY")
+RERANK_MODEL_FREE = _opt_env("RERANK_MODEL_FREE")
+RERANK_MODEL_PAID = _opt_env("RERANK_MODEL_PAID")
+RERANK_TOP_N = int(os.getenv("RERANK_TOP_N", "3"))
+
+_RERANK_CIRCUIT = _FallbackCircuit(
+    FALLBACK_COOLDOWN, has_free=bool(RERANK_MODEL_FREE)
+)
+
+
+def build_rerank_func() -> Callable[..., Any] | None:
+    """构造 rerank 精排函数 (标准 OpenAI 兼容端点, 免费优先 + 付费兜底).
+
+    三键任一为空返回 None: 调用侧据此设 QueryParam.enable_rerank=False.
+    LightRAG 以关键字调用 rerank_func(query=..., documents=..., top_n=...)
+    (utils.py apply_rerank_if_enabled); 故必须用包装函数承接, 不能用
+    partial 预绑定 top_n (同为关键字会冲突报 multiple values).
+    精排后保留数取 .env 的 RERANK_TOP_N, 忽略 lightrag 传入的 top_n.
+    """
+
+    def _is_configured() -> bool:
+        # 免费/付费模型任一即可 (free 可空 = 仅用付费, 与 QUERY 语义一致)
+        return bool(
+            RERANK_BASE_URL
+            and RERANK_API_KEY
+            and (RERANK_MODEL_FREE or RERANK_MODEL_PAID)
+        )
+
+    if not _is_configured():
+        return None
+
+    async def _rerank_wrapper(
+        query: str,
+        documents: list[str],
+        top_n: int | None = None,
+    ) -> list[dict[str, Any]]:
+        # top_n 显式承接 lightrag 传入值但忽略: 精排保留数统一由 .env RERANK_TOP_N 决定.
+        # 绝不透传 **kwargs, 否则与 generic_rerank_api 的 top_n 关键字冲突 (已实测报错).
+        use_paid = _RERANK_CIRCUIT.should_use_paid()
+        model = RERANK_MODEL_PAID if use_paid else RERANK_MODEL_FREE
+
+        async def _call(m: str) -> list[dict[str, Any]]:
+            return await generic_rerank_api(
+                query=query,
+                documents=documents,
+                model=m,
+                base_url=RERANK_BASE_URL,
+                api_key=RERANK_API_KEY,
+                top_n=RERANK_TOP_N,
+            )
+
+        try:
+            return await _call(model)
+        except Exception:
+            # rerank API 限流/失败 → 本次兜底到付费档
+            _RERANK_CIRCUIT.trip()
+            return await _call(RERANK_MODEL_PAID)
+
+    return _rerank_wrapper
 
 
 def build_llm_func():

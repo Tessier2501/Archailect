@@ -27,6 +27,7 @@ from src.config import (
     STORAGE_DIR,
     build_embedding_func,
     build_llm_func,
+    build_rerank_func,
     build_role_llm_configs,
 )
 
@@ -110,6 +111,11 @@ async def _get_rag_instance(model: str) -> LightRAG:
             "llm_model_func": build_llm_func(),
             "embedding_func": build_embedding_func(),
         }
+        # 可选 rerank 精排: 未配置 (env 三键任一为空) 时仅警告无害空转;
+        # 与 enable_rerank 联动, 见 chat_completions 的 QueryParam.
+        rerank_func = build_rerank_func()
+        if rerank_func is not None:
+            rag_kwargs["rerank_model_func"] = rerank_func
         role_configs = build_role_llm_configs()
         if role_configs:
             rag_kwargs["role_llm_configs"] = role_configs
@@ -159,6 +165,46 @@ def _extract_system_prompt(messages: list[dict[str, Any]]) -> str:
     """提取所有 role=system 的消息内容, 用换行合并 (透传不丢弃)."""
     parts = [m.get("content", "") for m in messages if m.get("role") == "system"]
     return "\n".join(p for p in parts if isinstance(p, str) and p.strip())
+
+
+_MSG_CONTENT_MAX = 6
+
+
+def _msg_to_text(content: Any) -> str:
+    """将 OpenAI 消息 content (string | list[part]) 规整为纯文本."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
+def _extract_conversation_history(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """取最后一条 user 之前的最近 N 条消息作为对话历史.
+
+    仅作 LLM 生成上下文 (1.5.6 验证: 不参与检索), 限 _MSG_CONTENT_MAX 条控 token.
+    system 消息已在 _extract_system_prompt 单独透传, 这里排除避免重复.
+    """
+    history: list[dict[str, str]] = []
+    # 从后往前, 跳过最后一条 user (它才是本次检索/提问串)
+    for m in reversed(messages[:-1]):
+        role = m.get("role", "")
+        if role not in ("user", "assistant"):
+            continue
+        text = _msg_to_text(m.get("content", "")).strip()
+        if not text:
+            continue
+        history.append({"role": role, "content": text})
+        if len(history) >= _MSG_CONTENT_MAX:
+            break
+    history.reverse()
+    return history
 
 
 def _extract_last_user_query(messages: list[dict[str, Any]]) -> str:
@@ -342,19 +388,26 @@ async def chat_completions(req: ChatRequest) -> Any:
                 exc.status_code,
             )
 
-        # ---- 2. System Prompt 透传 + 提取用户提问 ----
+        # ---- 2. System Prompt 透传 + 提取用户提问 + 多轮上下文 ----
         user_system_prompt = _extract_system_prompt(req.messages)
         query = _extract_last_user_query(req.messages)
+        history = _extract_conversation_history(req.messages)
         rag_system_prompt = build_rag_system_prompt(user_system_prompt)
 
-        # ---- 3. LightRAG 查询 (hybrid 模式; 不依赖默认 mix) ----
-        # top_k/chunk_top_k 显式调大: 提升"因果/叙事细节"所在原文 chunk 的召回,
-        # 缓解实体图对因果时序覆盖弱导致的回答片面 (见 plan.md README 审查结论).
+        # ---- 3. LightRAG 查询 ----
+        # mode=mix (kg+向量双通道): 反事实/字面不匹配问题增加向量召回路径
+        #   (诊断: Q2 naive 模式命中 17269 锚点, hybrid 图谱通道挤掉向量结果).
+        # top_k/chunk_top_k 显式调大: 提高因果/叙事细节原文 chunk 召回.
+        # enable_rerank: 未配置 rerank (env 三键任一为空) 时为 False,
+        #   消除 "Rerank enabled but no rerank model" 空转警告.
+        rerank_available = build_rerank_func() is not None
         param = QueryParam(
-            mode="hybrid",
+            mode="mix",
             stream=req.stream,
-            top_k=12,
-            chunk_top_k=8,
+            top_k=20,
+            chunk_top_k=12,
+            enable_rerank=rerank_available,
+            conversation_history=history,
         )
         result = await rag.aquery(query, param=param, system_prompt=rag_system_prompt)
 

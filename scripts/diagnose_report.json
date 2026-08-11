@@ -1,0 +1,971 @@
+{
+  "model": "rifters",
+  "n_cases": 22,
+  "cases": [
+    {
+      "tag": "Q1-hybrid-V1",
+      "mode": "hybrid",
+      "inject_aliases": false,
+      "history": false,
+      "query": "为什么智能凝胶 Node 1211/BCC 即使被编程为阻止 Behemoth，仍然未能把 Lenie Clarke 消灭在 Beebe 站？在她调查海底核弹的",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "intelligent gel",
+          "failure to eliminate",
+          "nuclear bomb detonation",
+          "contain Behemoth"
+        ],
+        "low_level": [
+          "Node 1211/BCC",
+          "Lenie Clarke",
+          "Beebe站",
+          "Behemoth",
+          "underwater nuclear bomb"
+        ]
+      },
+      "entity_variant_hits": {},
+      "relationship_variant_hits": {
+        "behemoth": {
+          "ßehemoth": 1,
+          "Behemoth Meme": 1
+        }
+      },
+      "n_entities": 11,
+      "n_relationships": 36,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "ic information streams across her contacts, turns her eyes into bright points of mercury. Light from a holo display catc",
+        "exactly; the perverse logic that had spawned and twisted these electronic demons was something better left to hackers an",
+        "everybody down and all of a sudden there's this K-selector walking out of nowhere, looks like one of those old litcrits "
+      ]
+    },
+    {
+      "tag": "Q1-hybrid-V2",
+      "mode": "hybrid",
+      "inject_aliases": true,
+      "history": false,
+      "query": "为什么智能凝胶 Node 1211/BCC 即使被编程为阻止 Behemoth，仍然未能把 Lenie Clarke 消灭在 Beebe 站？在她调查海底核弹的",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "Node 1211/BCC",
+          "1211",
+          "Behemoth",
+          "ßehemoth",
+          "Lenie Clarke",
+          "Beebe station"
+        ],
+        "low_level": []
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "n_entities": 13,
+      "n_relationships": 12,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "ic information streams across her contacts, turns her eyes into bright points of mercury. Light from a holo display catc",
+        ".\"    \"What was your old job?\" Caraco wonders.    \"Public relations. Mostly Honquarium franchises.\"    \"You?\"    \"Maybe ",
+        "everybody down and all of a sudden there's this K-selector walking out of nowhere, looks like one of those old litcrits "
+      ]
+    },
+    {
+      "tag": "Q1-naive-V1",
+      "mode": "naive",
+      "inject_aliases": false,
+      "history": false,
+      "query": "为什么智能凝胶 Node 1211/BCC 即使被编程为阻止 Behemoth，仍然未能把 Lenie Clarke 消灭在 Beebe 站？在她调查海底核弹的",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [],
+        "low_level": []
+      },
+      "entity_variant_hits": {},
+      "relationship_variant_hits": {},
+      "n_entities": 0,
+      "n_relationships": 0,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "ic information streams across her contacts, turns her eyes into bright points of mercury. Light from a holo display catc",
+        "everybody down and all of a sudden there's this K-selector walking out of nowhere, looks like one of those old litcrits ",
+        "exactly; the perverse logic that had spawned and twisted these electronic demons was something better left to hackers an"
+      ]
+    },
+    {
+      "tag": "Q1-naive-V2",
+      "mode": "naive",
+      "inject_aliases": true,
+      "history": false,
+      "query": "为什么智能凝胶 Node 1211/BCC 即使被编程为阻止 Behemoth，仍然未能把 Lenie Clarke 消灭在 Beebe 站？在她调查海底核弹的",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [],
+        "low_level": []
+      },
+      "entity_variant_hits": {},
+      "relationship_variant_hits": {},
+      "n_entities": 0,
+      "n_relationships": 0,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "ic information streams across her contacts, turns her eyes into bright points of mercury. Light from a holo display catc",
+        "everybody down and all of a sudden there's this K-selector walking out of nowhere, looks like one of those old litcrits ",
+        "exactly; the perverse logic that had spawned and twisted these electronic demons was something better left to hackers an"
+      ]
+    },
+    {
+      "tag": "Q1-mix-V1",
+      "mode": "mix",
+      "inject_aliases": false,
+      "history": false,
+      "query": "为什么智能凝胶 Node 1211/BCC 即使被编程为阻止 Behemoth，仍然未能把 Lenie Clarke 消灭在 Beebe 站？在她调查海底核弹的",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "smart gel",
+          "programmed to stop Behemoth",
+          "failure to eliminate Lenie Clarke",
+          "nuclear bomb detonation",
+          "contain Behemoth"
+        ],
+        "low_level": [
+          "Node 1211/BCC",
+          "Behemoth",
+          "Lenie Clarke",
+          "Beebe Station",
+          "undersea nuclear bomb"
+        ]
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth Meme": 1,
+          "Behemoth": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "Behemoth Meme": 1,
+          "Behemoth": 1,
+          "ßehemoth": 2
+        }
+      },
+      "n_entities": 12,
+      "n_relationships": 49,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "ic information streams across her contacts, turns her eyes into bright points of mercury. Light from a holo display catc",
+        ".\"    \"What was your old job?\" Caraco wonders.    \"Public relations. Mostly Honquarium franchises.\"    \"You?\"    \"Maybe ",
+        "everybody down and all of a sudden there's this K-selector walking out of nowhere, looks like one of those old litcrits "
+      ]
+    },
+    {
+      "tag": "Q1-mix-V2",
+      "mode": "mix",
+      "inject_aliases": true,
+      "history": false,
+      "query": "为什么智能凝胶 Node 1211/BCC 即使被编程为阻止 Behemoth，仍然未能把 Lenie Clarke 消灭在 Beebe 站？在她调查海底核弹的",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "Node 1211/BCC",
+          "1211",
+          "Behemoth",
+          "ßehemoth",
+          "Lenie Clarke",
+          "Beebe station"
+        ],
+        "low_level": []
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "n_entities": 13,
+      "n_relationships": 12,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "ic information streams across her contacts, turns her eyes into bright points of mercury. Light from a holo display catc",
+        "frowns in the darkness. \"Show what?\"    \"You know what! How — afraid you are!\"    \"Afraid?\"    \"Of being here, of being ",
+        "everybody down and all of a sudden there's this K-selector walking out of nowhere, looks like one of those old litcrits "
+      ]
+    },
+    {
+      "tag": "Q2-hybrid-V1",
+      "mode": "hybrid",
+      "inject_aliases": false,
+      "history": false,
+      "query": "在提及凝胶时，我特指 Node 1211/BCC 或 1211。",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "gel"
+        ],
+        "low_level": [
+          "Node 1211/BCC",
+          "1211"
+        ]
+      },
+      "entity_variant_hits": {
+        "node1211": {
+          "Node 1211/BCC": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        },
+        "node1211": {
+          "Node 1211/BCC": 14,
+          "1211": 1
+        }
+      },
+      "n_entities": 25,
+      "n_relationships": 38,
+      "hit": {
+        "status": "HIT",
+        "hit_anchors": [
+          "node1211_darkness",
+          "node1211_identity"
+        ],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        ", if she could actually summon the nerve to interrogate him now that there was no pretense to hide behind. He almost hop",
+        "everybody down and all of a sudden there's this K-selector walking out of nowhere, looks like one of those old litcrits ",
+        "seem especially interested.    \"Getting this from the gel, I mean. We've got a radio link. Why didn't someone just tell "
+      ]
+    },
+    {
+      "tag": "Q2-hybrid-V2",
+      "mode": "hybrid",
+      "inject_aliases": true,
+      "history": false,
+      "query": "在提及凝胶时，我特指 Node 1211/BCC 或 1211。",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "Node 1211/BCC",
+          "1211",
+          "Behemoth",
+          "ßehemoth",
+          "Lenie Clarke",
+          "Beebe station"
+        ],
+        "low_level": []
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "n_entities": 13,
+      "n_relationships": 12,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "t-plus-six seconds: something had been treed on a server in the Hokkaido microwave array. It wasn't a smart gel. There w",
+        "the sky overhead, piercing the clouds with radar and infrared, looking for her.  It just felt that way, somehow. Not lik",
+        "seem especially interested.    \"Getting this from the gel, I mean. We've got a radio link. Why didn't someone just tell "
+      ]
+    },
+    {
+      "tag": "Q2-naive-V1",
+      "mode": "naive",
+      "inject_aliases": false,
+      "history": false,
+      "query": "在提及凝胶时，我特指 Node 1211/BCC 或 1211。",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [],
+        "low_level": []
+      },
+      "entity_variant_hits": {},
+      "relationship_variant_hits": {},
+      "n_entities": 0,
+      "n_relationships": 0,
+      "hit": {
+        "status": "HIT",
+        "hit_anchors": [
+          "node1211_darkness"
+        ],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "t-plus-six seconds: something had been treed on a server in the Hokkaido microwave array. It wasn't a smart gel. There w",
+        ", if she could actually summon the nerve to interrogate him now that there was no pretense to hide behind. He almost hop",
+        "seem especially interested.    \"Getting this from the gel, I mean. We've got a radio link. Why didn't someone just tell "
+      ]
+    },
+    {
+      "tag": "Q2-naive-V2",
+      "mode": "naive",
+      "inject_aliases": true,
+      "history": false,
+      "query": "在提及凝胶时，我特指 Node 1211/BCC 或 1211。",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [],
+        "low_level": []
+      },
+      "entity_variant_hits": {},
+      "relationship_variant_hits": {},
+      "n_entities": 0,
+      "n_relationships": 0,
+      "hit": {
+        "status": "HIT",
+        "hit_anchors": [
+          "node1211_darkness"
+        ],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "t-plus-six seconds: something had been treed on a server in the Hokkaido microwave array. It wasn't a smart gel. There w",
+        ", if she could actually summon the nerve to interrogate him now that there was no pretense to hide behind. He almost hop",
+        "seem especially interested.    \"Getting this from the gel, I mean. We've got a radio link. Why didn't someone just tell "
+      ]
+    },
+    {
+      "tag": "Q2-mix-V1",
+      "mode": "mix",
+      "inject_aliases": false,
+      "history": false,
+      "query": "在提及凝胶时，我特指 Node 1211/BCC 或 1211。",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "gel"
+        ],
+        "low_level": [
+          "Node 1211/BCC",
+          "1211"
+        ]
+      },
+      "entity_variant_hits": {
+        "node1211": {
+          "Node 1211/BCC": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "ßehemoth": 1,
+          "Behemoth": 1
+        },
+        "node1211": {
+          "Node 1211/BCC": 14,
+          "1211": 1
+        }
+      },
+      "n_entities": 23,
+      "n_relationships": 121,
+      "hit": {
+        "status": "HIT",
+        "hit_anchors": [
+          "node1211_darkness"
+        ],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "t-plus-six seconds: something had been treed on a server in the Hokkaido microwave array. It wasn't a smart gel. There w",
+        ", if she could actually summon the nerve to interrogate him now that there was no pretense to hide behind. He almost hop",
+        "had enough practice to make it work. She rose a few meters off the bottom; the drag from the new backpack slowed her a b"
+      ]
+    },
+    {
+      "tag": "Q2-mix-V2",
+      "mode": "mix",
+      "inject_aliases": true,
+      "history": false,
+      "query": "在提及凝胶时，我特指 Node 1211/BCC 或 1211。",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "Node 1211/BCC",
+          "1211",
+          "Behemoth",
+          "ßehemoth",
+          "Lenie Clarke",
+          "Beebe station"
+        ],
+        "low_level": []
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "n_entities": 13,
+      "n_relationships": 12,
+      "hit": {
+        "status": "HIT",
+        "hit_anchors": [
+          "node1211_darkness"
+        ],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "t-plus-six seconds: something had been treed on a server in the Hokkaido microwave array. It wasn't a smart gel. There w",
+        "the sky overhead, piercing the clouds with radar and infrared, looking for her.  It just felt that way, somehow. Not lik",
+        ", if she could actually summon the nerve to interrogate him now that there was no pretense to hide behind. He almost hop"
+      ]
+    },
+    {
+      "tag": "Q3-hybrid-V1",
+      "mode": "hybrid",
+      "inject_aliases": false,
+      "history": false,
+      "query": "What is Behemoth?",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "definition"
+        ],
+        "low_level": [
+          "Behemoth"
+        ]
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1,
+          "ßehemoth": 1,
+          "Behemoth Meme": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "ßehemoth": 109,
+          "Behemoth": 4,
+          "ßehemoth Mark 2": 1
+        },
+        "node1211": {
+          "1211": 1
+        }
+      },
+      "n_entities": 17,
+      "n_relationships": 129,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "Armageddon around inside me. Come on, Rowan. What do you take me for? This thing evolved on the bottom of the ocean and ",
+        "everybody down and all of a sudden there's this K-selector walking out of nowhere, looks like one of those old litcrits ",
+        "\"How come?\"  \"Diseases are just little predators that eat you from the inside. If they're designed to feed on your molec"
+      ]
+    },
+    {
+      "tag": "Q3-hybrid-V2",
+      "mode": "hybrid",
+      "inject_aliases": true,
+      "history": false,
+      "query": "What is Behemoth?",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "Node 1211/BCC",
+          "1211",
+          "Behemoth",
+          "ßehemoth",
+          "Lenie Clarke",
+          "Beebe station"
+        ],
+        "low_level": []
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "n_entities": 13,
+      "n_relationships": 12,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "Armageddon around inside me. Come on, Rowan. What do you take me for? This thing evolved on the bottom of the ocean and ",
+        "idence, no preshocks, no changes in microgravity or ocean depth. None of the little telltales that usually portend a sei",
+        "\"How come?\"  \"Diseases are just little predators that eat you from the inside. If they're designed to feed on your molec"
+      ]
+    },
+    {
+      "tag": "Q3-naive-V1",
+      "mode": "naive",
+      "inject_aliases": false,
+      "history": false,
+      "query": "What is Behemoth?",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [],
+        "low_level": []
+      },
+      "entity_variant_hits": {},
+      "relationship_variant_hits": {},
+      "n_entities": 0,
+      "n_relationships": 0,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "Armageddon around inside me. Come on, Rowan. What do you take me for? This thing evolved on the bottom of the ocean and ",
+        "\"How come?\"  \"Diseases are just little predators that eat you from the inside. If they're designed to feed on your molec",
+        "olytes take her guess seriously. Then they'll start playing, trying out the new sensory mode, perhaps even reveling in i"
+      ]
+    },
+    {
+      "tag": "Q3-naive-V2",
+      "mode": "naive",
+      "inject_aliases": true,
+      "history": false,
+      "query": "What is Behemoth?",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [],
+        "low_level": []
+      },
+      "entity_variant_hits": {},
+      "relationship_variant_hits": {},
+      "n_entities": 0,
+      "n_relationships": 0,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "Armageddon around inside me. Come on, Rowan. What do you take me for? This thing evolved on the bottom of the ocean and ",
+        "\"How come?\"  \"Diseases are just little predators that eat you from the inside. If they're designed to feed on your molec",
+        "olytes take her guess seriously. Then they'll start playing, trying out the new sensory mode, perhaps even reveling in i"
+      ]
+    },
+    {
+      "tag": "Q3-mix-V1",
+      "mode": "mix",
+      "inject_aliases": false,
+      "history": false,
+      "query": "What is Behemoth?",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "definition"
+        ],
+        "low_level": [
+          "Behemoth"
+        ]
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1,
+          "ßehemoth": 1,
+          "Behemoth Meme": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "ßehemoth": 109,
+          "Behemoth": 4,
+          "ßehemoth Mark 2": 1
+        },
+        "node1211": {
+          "1211": 1
+        }
+      },
+      "n_entities": 17,
+      "n_relationships": 129,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "Armageddon around inside me. Come on, Rowan. What do you take me for? This thing evolved on the bottom of the ocean and ",
+        "everybody down and all of a sudden there's this K-selector walking out of nowhere, looks like one of those old litcrits ",
+        "\"How come?\"  \"Diseases are just little predators that eat you from the inside. If they're designed to feed on your molec"
+      ]
+    },
+    {
+      "tag": "Q3-mix-V2",
+      "mode": "mix",
+      "inject_aliases": true,
+      "history": false,
+      "query": "What is Behemoth?",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "Node 1211/BCC",
+          "1211",
+          "Behemoth",
+          "ßehemoth",
+          "Lenie Clarke",
+          "Beebe station"
+        ],
+        "low_level": []
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "n_entities": 13,
+      "n_relationships": 12,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        "Armageddon around inside me. Come on, Rowan. What do you take me for? This thing evolved on the bottom of the ocean and ",
+        "idence, no preshocks, no changes in microgravity or ocean depth. None of the little telltales that usually portend a sei",
+        "\"How come?\"  \"Diseases are just little predators that eat you from the inside. If they're designed to feed on your molec"
+      ]
+    },
+    {
+      "tag": "Q4b-hybrid-V1a",
+      "mode": "hybrid",
+      "inject_aliases": false,
+      "history": true,
+      "query": "它为什么没消灭 Lenie Clarke？",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "failed elimination",
+          "reason"
+        ],
+        "low_level": [
+          "Lenie Clarke"
+        ]
+      },
+      "entity_variant_hits": {},
+      "relationship_variant_hits": {
+        "behemoth": {
+          "ßehemoth": 1
+        }
+      },
+      "n_entities": 23,
+      "n_relationships": 37,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        ". \"You sure? I mean—\"  \"Of course I'm sure, you think I'm making it up? It was Lubin. It had to be, that's how he tracke",
+        "arke glared: from the man who had tried to kill her, to the man who'd risked his life to stop him. Every hour you're in ",
+        "bellies distended with superconducting ground-effectors that could lift a man right off his feet. Usually that wasn't ne"
+      ]
+    },
+    {
+      "tag": "Q4b-hybrid-V1b",
+      "mode": "hybrid",
+      "inject_aliases": false,
+      "history": false,
+      "query": "它为什么没消灭 Lenie Clarke？",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "failed elimination",
+          "reason"
+        ],
+        "low_level": [
+          "Lenie Clarke"
+        ]
+      },
+      "entity_variant_hits": {},
+      "relationship_variant_hits": {
+        "behemoth": {
+          "ßehemoth": 1
+        }
+      },
+      "n_entities": 23,
+      "n_relationships": 37,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        ". \"You sure? I mean—\"  \"Of course I'm sure, you think I'm making it up? It was Lubin. It had to be, that's how he tracke",
+        "arke glared: from the man who had tried to kill her, to the man who'd risked his life to stop him. Every hour you're in ",
+        "bellies distended with superconducting ground-effectors that could lift a man right off his feet. Usually that wasn't ne"
+      ]
+    },
+    {
+      "tag": "Q4b-hybrid-V2a",
+      "mode": "hybrid",
+      "inject_aliases": true,
+      "history": true,
+      "query": "它为什么没消灭 Lenie Clarke？",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "Node 1211/BCC",
+          "1211",
+          "Behemoth",
+          "ßehemoth",
+          "Lenie Clarke",
+          "Beebe station"
+        ],
+        "low_level": []
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "n_entities": 13,
+      "n_relationships": 12,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        ". \"You sure? I mean—\"  \"Of course I'm sure, you think I'm making it up? It was Lubin. It had to be, that's how he tracke",
+        "'s boot is almost touching his nose.    \"Hey.\" Lenie's voice, distant, not particularly interested.    \"Hey yourself, Le",
+        "bellies distended with superconducting ground-effectors that could lift a man right off his feet. Usually that wasn't ne"
+      ]
+    },
+    {
+      "tag": "Q4b-hybrid-V2b",
+      "mode": "hybrid",
+      "inject_aliases": true,
+      "history": false,
+      "query": "它为什么没消灭 Lenie Clarke？",
+      "status": "success",
+      "message": "Query processed successfully",
+      "llm_keywords": {
+        "high_level": [
+          "Node 1211/BCC",
+          "1211",
+          "Behemoth",
+          "ßehemoth",
+          "Lenie Clarke",
+          "Beebe station"
+        ],
+        "low_level": []
+      },
+      "entity_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "relationship_variant_hits": {
+        "behemoth": {
+          "Behemoth": 1
+        }
+      },
+      "n_entities": 13,
+      "n_relationships": 12,
+      "hit": {
+        "status": "PARTIAL",
+        "hit_anchors": [],
+        "partial_anchors": [
+          "behemoth_mention"
+        ],
+        "chunks_total": 8,
+        "cross_book_chunks": 8,
+        "cross_book_ratio": 1.0
+      },
+      "sample_chunk_previews": [
+        ". \"You sure? I mean—\"  \"Of course I'm sure, you think I'm making it up? It was Lubin. It had to be, that's how he tracke",
+        "'s boot is almost touching his nose.    \"Hey.\" Lenie's voice, distant, not particularly interested.    \"Hey yourself, Le",
+        "bellies distended with superconducting ground-effectors that could lift a man right off his feet. Usually that wasn't ne"
+      ]
+    }
+  ]
+}
