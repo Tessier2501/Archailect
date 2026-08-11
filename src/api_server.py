@@ -348,7 +348,14 @@ async def chat_completions(req: ChatRequest) -> Any:
         rag_system_prompt = build_rag_system_prompt(user_system_prompt)
 
         # ---- 3. LightRAG 查询 (hybrid 模式; 不依赖默认 mix) ----
-        param = QueryParam(mode="hybrid", stream=req.stream)
+        # top_k/chunk_top_k 显式调大: 提升"因果/叙事细节"所在原文 chunk 的召回,
+        # 缓解实体图对因果时序覆盖弱导致的回答片面 (见 plan.md README 审查结论).
+        param = QueryParam(
+            mode="hybrid",
+            stream=req.stream,
+            top_k=12,
+            chunk_top_k=8,
+        )
         result = await rag.aquery(query, param=param, system_prompt=rag_system_prompt)
 
         # ---- 4. 响应格式: 流式 SSE / 非流式 JSON ----
