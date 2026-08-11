@@ -11,6 +11,7 @@ from src.config import (
     STORAGE_DIR,
     build_embedding_func,
     build_llm_func,
+    build_role_llm_configs,
 )
 
 
@@ -43,12 +44,16 @@ def build_rag(book: str) -> LightRAG:
     注意: workspace 非空会使存储文件路径变为 storage/{book}/{book}/.
     建图 (builder) 与查询 (api_server) 必须传相同 workspace, 保持一致.
     """
-    return LightRAG(
-        working_dir=str(STORAGE_DIR / book),
-        workspace=book,
-        llm_model_func=build_llm_func(),
-        embedding_func=build_embedding_func(),
-    )
+    kwargs: dict = {
+        "working_dir": str(STORAGE_DIR / book),
+        "workspace": book,
+        "llm_model_func": build_llm_func(),
+        "embedding_func": build_embedding_func(),
+    }
+    role_configs = build_role_llm_configs()
+    if role_configs:
+        kwargs["role_llm_configs"] = role_configs
+    return LightRAG(**kwargs)
 
 
 async def main() -> None:

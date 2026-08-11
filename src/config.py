@@ -1,9 +1,14 @@
 """集中管理环境变量, 并提供 LLM / Embedding 工厂函数.
 
-架构 (2026-08-11 调整): LLM 与 Embedding 均统一走 Cherry 网关.
-免费优先 (LLM_FREE_MODEL / EMBEDDING_MODEL_FREE), 被 429/限流后
-触发付费兜底 (LLM_PAID_MODEL / EMBEDDING_MODEL_PAID), 冷却
-FALLBACK_COOLDOWN 秒内直接走付费, 冷却过后自动回免费.
+架构 (2026-08-11):
+- LLM 分角色: QUERY (主, 必填) / KEYWORD / EXTRACT (可选, 空=回退 QUERY).
+  每个已配置角色均有 free/paid 双档 + 独立 fallback 电路:
+  免费优先 → 429/限流后"仅当次"退付费 (见 _FallbackCircuit), 下次自动回免费.
+- KEYWORD/EXTRACT 未配置时返回 None → LightRAG 回退到 base llm_model_func
+  (=QUERY wrapper, QUERY 代劳).
+- Provider: QUERY_BASE_URL/QUERY_API_KEY 与 EMBEDDING_BASE_URL/EMBEDDING_API_KEY
+  必填; KEYWORD/EXTRACT 可选, 各自可配独立 provider (缺省回退 QUERY).
+- Embedding 免费优先+付费兜底, 同模型同维度可混用.
 """
 from __future__ import annotations
 
@@ -12,7 +17,7 @@ import threading
 import time
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from dotenv import load_dotenv
 from lightrag.llm.openai import openai_complete_if_cache, openai_embed
@@ -23,7 +28,7 @@ from lightrag.utils import EmbeddingFunc, wrap_embedding_func_with_attrs
 load_dotenv(override=True)
 
 # ---- 路径 ----
-BASE_DIR = Path(__file__).resolve().parent.parent          # Archailect/
+BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 STORAGE_DIR = BASE_DIR / "storage"
 
@@ -49,17 +54,41 @@ def _resolve_env(name: str) -> str:
     return value
 
 
-# ============================================================
-# Cherry 统一网关配置 (LLM 与 Embedding 共用 base_url/api_key)
-# ============================================================
-CHERRY_BASE_URL = _resolve_env("CHERRY_BASE_URL")
-CHERRY_API_KEY = _resolve_env("CHERRY_API_KEY")
+def _opt_env(name: str) -> str:
+    """读取可选环境变量: 空串或缺失返回空 (用于可选角色/免费模型)."""
+    return os.getenv(name, "").strip()
 
-LLM_FREE_MODEL = _resolve_env("LLM_FREE_MODEL")
-LLM_PAID_MODEL = _resolve_env("LLM_PAID_MODEL")
-EMBEDDING_MODEL_FREE = _resolve_env("EMBEDDING_MODEL_FREE")
+
+# ============================================================
+# Provider 配置: QUERY (主 LLM) 与 Embedding 独立必填
+# ============================================================
+QUERY_BASE_URL = _resolve_env("QUERY_BASE_URL")
+QUERY_API_KEY = _resolve_env("QUERY_API_KEY")
+EMBEDDING_BASE_URL = _resolve_env("EMBEDDING_BASE_URL")
+EMBEDDING_API_KEY = _resolve_env("EMBEDDING_API_KEY")
+
+# ============================================================
+# LLM 角色 provider: KEYWORD/EXTRACT 可选, 缺省回退 QUERY
+# ============================================================
+KEYWORD_BASE_URL = _opt_env("KEYWORD_BASE_URL") or QUERY_BASE_URL
+KEYWORD_API_KEY = _opt_env("KEYWORD_API_KEY") or QUERY_API_KEY
+EXTRACT_BASE_URL = _opt_env("EXTRACT_BASE_URL") or QUERY_BASE_URL
+EXTRACT_API_KEY = _opt_env("EXTRACT_API_KEY") or QUERY_API_KEY
+
+# ============================================================
+# LLM 角色模型配置
+# QUERY 必填; KEYWORD/EXTRACT 可选 (空 = 回退 QUERY)
+# ============================================================
+QUERY_FREE_MODEL = _opt_env("QUERY_FREE_MODEL")
+QUERY_PAID_MODEL = _resolve_env("QUERY_PAID_MODEL")
+
+KEYWORD_FREE_MODEL = _opt_env("KEYWORD_FREE_MODEL")
+KEYWORD_PAID_MODEL = _opt_env("KEYWORD_PAID_MODEL")
+EXTRACT_FREE_MODEL = _opt_env("EXTRACT_FREE_MODEL")
+EXTRACT_PAID_MODEL = _opt_env("EXTRACT_PAID_MODEL")
+
+EMBEDDING_MODEL_FREE = _opt_env("EMBEDDING_MODEL_FREE")
 EMBEDDING_MODEL_PAID = _resolve_env("EMBEDDING_MODEL_PAID")
-
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 EMBEDDING_MAX_TOKEN_SIZE = int(os.getenv("EMBEDDING_MAX_TOKEN_SIZE", "32768"))
 FALLBACK_COOLDOWN = float(os.getenv("FALLBACK_COOLDOWN", "60"))
@@ -69,109 +98,161 @@ FALLBACK_COOLDOWN = float(os.getenv("FALLBACK_COOLDOWN", "60"))
 # 免费/付费双档状态机 (线程安全)
 # ============================================================
 class _FallbackCircuit:
-    """免费优先; 429/限流触发切付费并进入冷却; 冷却后自动回免费.
+    """免费优先; has_free=False 时恒用付费 (免费模型空置场景).
 
-    - should_use_paid(): 当前是否应直接走付费 (冷却期内)
-    - trip(): 标记免费被限流, 进入 FALLBACK_COOLDOWN 秒付费冷却
-    - 用 threading.Lock 保证 Embedding worker 多线程调用下安全
+    严格"仅当次回退"语义 (2026-08-11 用户确认):
+    - 默认每调用都先试免费 (无冷却窗口).
+    - 免费 429 失败 → trip() 置一次性标志 → **仅下次**调用强制走付费,
+      再下一次自动恢复免费 (不依赖时间冷却).
+    - has_free=False 时恒用付费.
+
+    注: cooldown 参数保留兼容 (若 >0 则退化为旧时间冷却语义, 暂未用).
     """
 
-    def __init__(self, cooldown: float) -> None:
+    def __init__(self, cooldown: float, has_free: bool) -> None:
         self._cooldown = cooldown
+        self._has_free = has_free
         self._lock = threading.Lock()
-        self._paid_until: float = 0.0
+        self._paid_once: bool = False
 
     def should_use_paid(self) -> bool:
         with self._lock:
-            return time.monotonic() < self._paid_until
+            if not self._has_free:
+                return True
+            # 仅消费一次性付费标志: 本次判定后即清除, 下次回到免费.
+            flag = self._paid_once
+            self._paid_once = False
+            return flag
 
     def trip(self) -> None:
         with self._lock:
-            self._paid_until = time.monotonic() + self._cooldown
+            self._paid_once = True
 
 
-_LLM_FALLBACK = _FallbackCircuit(FALLBACK_COOLDOWN)
-_EMBED_FALLBACK = _FallbackCircuit(FALLBACK_COOLDOWN)
+def _make_llm_wrapper(
+    base_url: str,
+    api_key: str,
+    free_model: str | None,
+    paid_model: str,
+    circuit: _FallbackCircuit,
+) -> Callable[..., Any]:
+    """构造一个带 free/paid fallback 的 LLM 异步包装函数.
 
-
-# ============================================================
-# LLM (统一 cherry, 免费优先 + 付费兜底)
-# ============================================================
-async def _llm_wrapper(
-    prompt: str,
-    system_prompt: str | None = None,
-    history_messages: list[dict[str, Any]] | None = None,
-    **kwargs: Any,
-) -> str:
-    """LightRAG 可用的 LLM 包装函数.
-
-    核心背景: LightRAG 以 llm_model_func(prompt, system_prompt=..., **kwargs)
-    位置调用, 而 openai_complete_if_cache 的第一位置参数是 model.
-    本 wrapper 显式接收位置参数, 再以关键字转调, 避免参数错位.
-    free/paid 切换: 免费优先; 免费重试耗尽仍 429/限流则触发付费冷却并兜底.
+    供 LightRAG 的 llm_model_func 或 role_llm_configs 使用 (角色角色).
+    free_model=None 时直接用 paid.
     """
-    use_paid = _LLM_FALLBACK.should_use_paid()
-    model = LLM_PAID_MODEL if use_paid else LLM_FREE_MODEL
-    kwargs_for_call = {
-        "prompt": prompt,
-        "model": model,
-        "base_url": CHERRY_BASE_URL,
-        "api_key": CHERRY_API_KEY,
-        "system_prompt": system_prompt,
-        "history_messages": history_messages,
-        **kwargs,
-    }
-    try:
-        return await openai_complete_if_cache(**kwargs_for_call)
-    except Exception:
-        # openai SDK 已对 429 内建重试; 这里捕获的是重试耗尽后的限流类异常.
-        # 触发付费冷却, 并用付费模型重试一次兜底.
-        _LLM_FALLBACK.trip()
-        kwargs_for_call["model"] = LLM_PAID_MODEL
-        return await openai_complete_if_cache(**kwargs_for_call)
+
+    async def _wrapper(
+        prompt: str,
+        system_prompt: str | None = None,
+        history_messages: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> str:
+        use_paid = circuit.should_use_paid()
+        model = paid_model if use_paid else free_model
+        call_kwargs = {
+            "prompt": prompt,
+            "model": model,
+            "base_url": base_url,
+            "api_key": api_key,
+            "system_prompt": system_prompt,
+            "history_messages": history_messages,
+            **kwargs,
+        }
+        try:
+            return await openai_complete_if_cache(**call_kwargs)
+        except Exception:
+            # openai SDK 已对 429 内建重试; 这里捕获重试耗尽后的限流, 付费兜底.
+            circuit.trip()
+            call_kwargs["model"] = paid_model
+            return await openai_complete_if_cache(**call_kwargs)
+
+    return _wrapper
+
+
+# ---- 各角色电路 ----
+_QUERY_CIRCUIT = _FallbackCircuit(FALLBACK_COOLDOWN, has_free=bool(QUERY_FREE_MODEL))
+_KEYWORD_CIRCUIT = _FallbackCircuit(
+    FALLBACK_COOLDOWN, has_free=bool(KEYWORD_FREE_MODEL)
+)
+_EXTRACT_CIRCUIT = _FallbackCircuit(
+    FALLBACK_COOLDOWN, has_free=bool(EXTRACT_FREE_MODEL)
+)
+_EMBED_FALLBACK = _FallbackCircuit(FALLBACK_COOLDOWN, has_free=bool(EMBEDDING_MODEL_FREE))
 
 
 def build_llm_func():
-    """返回 LightRAG 可直接用作 llm_model_func 的绑定函数."""
-    return partial(_llm_wrapper)
+    """返回 QUERY 主模型的 LightRAG llm_model_func (用 QUERY 独立 provider)."""
+    return _make_llm_wrapper(
+        base_url=QUERY_BASE_URL,
+        api_key=QUERY_API_KEY,
+        free_model=QUERY_FREE_MODEL if QUERY_FREE_MODEL else None,
+        paid_model=QUERY_PAID_MODEL,
+        circuit=_QUERY_CIRCUIT,
+    )
+
+
+def build_role_llm_configs() -> dict[str, Any] | None:
+    """构造 LightRAG 的 role_llm_configs (仅含已配置的 KEYWORD/EXTRACT 角色).
+
+    未配置的角色返回 None → LightRAG 回退到 base llm_model_func (QUERY).
+    """
+    configs: dict[str, Any] = {}
+    if KEYWORD_FREE_MODEL or KEYWORD_PAID_MODEL:
+        configs["keyword"] = {
+            "func": _make_llm_wrapper(
+                base_url=KEYWORD_BASE_URL,
+                api_key=KEYWORD_API_KEY,
+                free_model=KEYWORD_FREE_MODEL if KEYWORD_FREE_MODEL else None,
+                paid_model=KEYWORD_PAID_MODEL or QUERY_PAID_MODEL,
+                circuit=_KEYWORD_CIRCUIT,
+            ),
+            "kwargs": {
+                "base_url": KEYWORD_BASE_URL,
+                "api_key": KEYWORD_API_KEY,
+            },
+        }
+    if EXTRACT_FREE_MODEL or EXTRACT_PAID_MODEL:
+        configs["extract"] = {
+            "func": _make_llm_wrapper(
+                base_url=EXTRACT_BASE_URL,
+                api_key=EXTRACT_API_KEY,
+                free_model=EXTRACT_FREE_MODEL if EXTRACT_FREE_MODEL else None,
+                paid_model=EXTRACT_PAID_MODEL or QUERY_PAID_MODEL,
+                circuit=_EXTRACT_CIRCUIT,
+            ),
+            "kwargs": {
+                "base_url": EXTRACT_BASE_URL,
+                "api_key": EXTRACT_API_KEY,
+            },
+        }
+    return configs if configs else None
 
 
 # ============================================================
-# Embedding (统一 cherry, 免费优先 + 付费兜底)
+# Embedding (独立 provider, 免费优先 + 付费兜底)
 # ============================================================
 async def _embed_with_fallback(texts: list[str]) -> list[list[float]]:
-    """Embedding 免费优先, 429/限流触发付费冷却并兜底, 维度恒定 1024."""
     use_paid = _EMBED_FALLBACK.should_use_paid()
     model = EMBEDDING_MODEL_PAID if use_paid else EMBEDDING_MODEL_FREE
     try:
         return await openai_embed.func(
             model=model,
-            base_url=CHERRY_BASE_URL,
-            api_key=CHERRY_API_KEY,
+            base_url=EMBEDDING_BASE_URL,
+            api_key=EMBEDDING_API_KEY,
             texts=texts,
         )
     except Exception:
-        # openai SDK 已对 429 内建重试; 此处为重试耗尽后的限流兜底.
         _EMBED_FALLBACK.trip()
         return await openai_embed.func(
             model=EMBEDDING_MODEL_PAID,
-            base_url=CHERRY_BASE_URL,
-            api_key=CHERRY_API_KEY,
+            base_url=EMBEDDING_BASE_URL,
+            api_key=EMBEDDING_API_KEY,
             texts=texts,
         )
 
 
 def build_embedding_func() -> EmbeddingFunc:
-    """构造带免费/付费兜底的 embedding 函数.
-
-    lightrag-hku 1.5.6 实例化即强制校验 embedding_func (不允许 None).
-    注意:
-    1. EmbeddingFunc 只按 func(texts) 调用, 无 kwargs 传递机制, 所有
-       provider 配置 (model/base_url/api_key) 必须在此闭包内绑定.
-    2. openai_embed 本身已是装饰后的 EmbeddingFunc 实例 (默认 dim=1536);
-       必须用 openai_embed.func 取原始函数再包装, 避免嵌套 unwrap.
-    3. free/paid 同模型同维度 (1024), 两种档生成的向量可混用.
-    """
     return EmbeddingFunc(
         embedding_dim=EMBEDDING_DIM,
         max_token_size=EMBEDDING_MAX_TOKEN_SIZE,

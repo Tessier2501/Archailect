@@ -27,6 +27,7 @@ from src.config import (
     STORAGE_DIR,
     build_embedding_func,
     build_llm_func,
+    build_role_llm_configs,
 )
 
 # ============================================================
@@ -103,12 +104,16 @@ async def _get_rag_instance(model: str) -> LightRAG:
                 detail=f"知识库 '{model}' 不存在. 请先运行: python -m src.builder --txt xxx.txt --book {model}",
             )
 
-        rag = LightRAG(
-            working_dir=str(storage_dir),
-            workspace=model,
-            llm_model_func=build_llm_func(),
-            embedding_func=build_embedding_func(),
-        )
+        rag_kwargs: dict = {
+            "working_dir": str(storage_dir),
+            "workspace": model,
+            "llm_model_func": build_llm_func(),
+            "embedding_func": build_embedding_func(),
+        }
+        role_configs = build_role_llm_configs()
+        if role_configs:
+            rag_kwargs["role_llm_configs"] = role_configs
+        rag = LightRAG(**rag_kwargs)
         # 与 builder.py 一致: 显式初始化 pipeline_status 与各 storage.
         # 缺失会导致查询路径 async with None (pipeline_status_lock 未初始化),
         # 已实测: 建图成功但查询报 "NoneType does not support async context manager".

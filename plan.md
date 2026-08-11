@@ -1,11 +1,7 @@
 # My Novel RAG 实施计划书
 
-> 交接对象: 任一后续 agent. 请先完整阅读本文档, 再按执行清单逐步实施.
 > 实施环境: WSL2 Ubuntu, conda 环境 myenv (Python 3.14.6), 目标路径 ~/Archailect (Linux 原生路径).
 > 权威代码: 全部实现以 src/ 目录下的源码为准, 本文档不内嵌参考代码, 以避免文档与源码漂移.
-> 更新记录: 2026-08-09 全链路验证通过 (主模型切 DS 官方, 嵌入切 qwen3-embedding-0.6b(free), 测试建图+端到端查询成功); Cherry Studio 接入指南并入 §5.3.
-> 更新记录: 2026-08-10 Cherry Studio (Windows 宿主) 全链路验证通过 (连通性 404 判读 + 真实问答双确认); 新增长期诊断服务 src/debug_server.py (model=debug, 独立 8001 端口, 见 §5.1.1), 日志持久化到 logs/.
-> 更新记录: 2026-08-11 全量建图遇 free 嵌入 429 击穿 (flush 阶段 RateLimitError; 三卷 LLM 提取已完成但向量库缺失); 20MB LLM 响应缓存已存档到 Windows Downloads 以保重跑零 DS 消耗; 架构改为统一 Cherry 网关, LLM 与 Embedding 均免费优先、付费兜底 (config.py fallback 状态机; .env 占位符待填).
 
 ---
 
@@ -16,8 +12,6 @@
 - 前端: 使用标准 OpenAI 接口格式的 LLM 平台 (本机 Windows 侧 Cherry Studio).
 - 后端: FastAPI + Uvicorn, 暴露 POST /v1/chat/completions.
 - RAG 引擎: lightrag-hku (锁定 1.5.6).
-- LLM: DeepSeek v4-flash (DeepSeek 官方 API, 推理模型).
-- Embedding: Qwen3-Embedding-0.6B 经 cherryin 网关 (免费档).
 
 三大核心功能:
 
@@ -201,33 +195,19 @@ async def openai_complete_if_cache(
 ├── data/                     # 原始 txt 书籍
 │   ├── 1 - Starfish - Peter Watts.txt
 │   ├── 2 - Behemoth - Peter Watts.txt
-│   ├── 3 - Maelstrom - Peter Watts.txt
-│   ├── test-sample.txt       # 测试用切片 (Starfish 前 250 行; 全量建图完成前保留)
-│   └── test2-sample.txt      # 测试用切片 (Maelstrom 前 250 行; 双库对照用)
+│   └── 3 - Maelstrom - Peter Watts.txt
 └── storage/                  # LightRAG 索引 (git 忽略) storage/{book}/
 ```
 
-存储路径注意: workspace 非空后索引位于 storage/{book}/{book}/ (如 storage/test/test/, storage/test2/test2/); storage/{book} 外层为工作目录, 内层为 workspace 数据.
-状态: storage/test/、storage/test2/ (测试库) 与 data/test-sample.txt、data/test2-sample.txt (切片) 当前保留, 供 Cherry Studio 双库对照验证; 全量建库用 rifters 后目录变为 storage/rifters/rifters/.
+存储路径注意: workspace 非空后索引位于 storage/{book}/{book}/; storage/{book} 外层为工作目录, 内层为 workspace 数据.
+状态: storage/rifters/ (全量库, workspace=rifters) 已建成; 测试库 storage/test/test2/ 与 data 切片已随全量建图成功删除 (2026-08-11).
 
 ---
 
 ## 5. 建图与运行
 
-### 5.1 当前状态 (2026-08-09 实测)
 
-- 架构 (2026-08-11): 统一 Cherry 网关. LLM 与 Embedding 均免费优先 (LLM_FREE_MODEL / EMBEDDING_MODEL_FREE), 被 429/限流后触发付费兜底 (LLM_PAID_MODEL / EMBEDDING_MODEL_PAID), FALLBACK_COOLDOWN 秒内走付费, 冷却后自动回免费. .env 用占位符 <...>, 用户手动填真实密钥/模型名.
-- 全量建图失败记录 (2026-08-11): 三卷 LLM 提取全部成功 (缓存 20MB 已存档到 Windows Downloads 的 rifters_cache_backup/), 但嵌入在 flush 阶段被 0.6b(free) 429 击穿, vdb_* 缺失. 重跑方案: 备份缓存放回 storage/rifters/rifters/ 后清空重建, LLM extract 全部缓存命中 (DS 零消耗), 仅 embedding 重跑.
-- 测试库状态: storage/test/、storage/test2/ 可用 (workspace=test/test2, 路径 storage/{book}/{book}/).
-- 测试文本建图实验成功: 250 行切片 -> 51 entities / 73 relations, 索引完整 (graphml + kv_store_* + vdb_*.json), 日志无 "Failed to extract".
-- 端到端查询验收全通: 非流式/流式 SSE/System Prompt 透传/404 错误结构/模型列表/健康检查, 详见 §6.
-- 已修复两个代码缺陷: config.py load_dotenv(override=True); api_server.py 构造后 await initialize_storages().
-- Cherry Studio 接入验证: 404 判读为链路通 + 真实问答成功 (model=test 回答准确列举知识库实体/关系/文档片段, 无编造), 详见 §6.
-- 双库隔离修复: 2026-08-10 发现 workspace 串扰 (双向), 已通过 builder/api_server 传 workspace 修复, test/test2 重建后 12 轮实验零串扰 (见 §3.9 #6).
-- 诊断服务: src/debug_server.py 为长期诊断服务 (model=debug, 独立 8001 端口). 用于排查多库路由与系统提示词透传问题; 曾有受控实验脚本 src/dual_probe.py 已随使命完成删除.
-- 待办: storage/rifters 全量建库 (三卷合并, 约 2.1MB 文本), 见 5.2 执行清单第 6 步.
-
-### 5.1.1 调试服务 (长期诊断工具, 独立 8001 端口)
+### 5.1 调试服务
 
 - 文件: src/debug_server.py, 独立监听 8001 端口, 不影响主服务 (8000); 与生产路由完全隔离.
 - 用途: 验证前端实际发送的 model 字段 / System Prompt (role=system 消息) / 消息结构 / stream 标志; 排查多库路由与系统提示词透传问题.
@@ -251,20 +231,21 @@ python --version
 pip install /tmp/lr_1_5_6/lightrag_hku-1.5.6-py3-none-any.whl
 pip install -r requirements.txt
 
-# 4. 配置环境变量 (.env 已改为占位符模板, 用户手动填入真实值后 config.py 的 _resolve_env 校验):
-#   - CHERRY_BASE_URL=https://open.cherryin.ai/v1, CHERRY_API_KEY=<cherry key>
-#   - LLM_FREE_MODEL=<free LLM 名>, LLM_PAID_MODEL=<paid LLM 名>
-#   - EMBEDDING_MODEL_FREE=<free 嵌入名, 如 qwen/qwen3-embedding-0.6b(free)>,
-#     EMBEDDING_MODEL_PAID=<paid 嵌入名, 如 qwen/qwen3-embedding-0.6b>
-#   - EMBEDDING_DIM=1024 (free/paid 必须同模型同维度), EMBEDDING_MAX_TOKEN_SIZE=32768
-#   - FALLBACK_COOLDOWN=60 (免费被限流后切付费的冷却秒数)
-#   - LLM_TIMEOUT=900, RAG_CACHE_MAX=8
-#   注意: 未填占位符时 config.py 启动即报错 (防止静默回退旧默认值);
-#         免费/付费嵌入必须同模型同向量维度, 向量才可混用.
+# 4. 配置环境变量 (.env 已填真实 key/模型名; 键结构如下):
+#   - QUERY_BASE_URL/QUERY_API_KEY (QUERY 主 LLM provider, 必填)
+#   - KEYWORD_BASE_URL/KEYWORD_API_KEY, EXTRACT_BASE_URL/EXTRACT_API_KEY (可选, 缺省回退 QUERY)
+#   - QUERY_FREE_MODEL/QUERY_PAID_MODEL (QUERY 主模型, 必填)
+#   - KEYWORD_FREE_MODEL/KEYWORD_PAID_MODEL, EXTRACT_FREE_MODEL/EXTRACT_PAID_MODEL (可选, 空=回退 QUERY)
+#   - EMBEDDING_BASE_URL/EMBEDDING_API_KEY (必填), EMBEDDING_MODEL_FREE/PAID, EMBEDDING_DIM=1024
+#   - FALLBACK_COOLDOWN=10, LLM_TIMEOUT=900, RAG_CACHE_MAX=8
+#   注意: 付费模型名必填 (config.py _resolve_env 启动即校验, 防呆);
+#         免费模型名可留空 = 仅用付费 (适配只有付费模型的上游);
+#         免费/付费嵌入必须同模型同向量维度, 向量才可混用;
+#         可选角色 (KEYWORD/EXTRACT) 若配置则经 role_llm_configs 注入, 留空则全由 QUERY 代劳.
 
 # 5. 放置书籍 txt 到 data/ 目录 (已有 Rifters 三卷)
 
-# 6. 建图 (每系列一次; 多卷用多个 --txt 合并)
+# 6. 建图 (每系列一次; 多卷用多个 --txt 合并; 示例如下)
 python -m src.builder --txt "data/1 - Starfish - Peter Watts.txt" \
                       --txt "data/2 - Behemoth - Peter Watts.txt" \
                       --txt "data/3 - Maelstrom - Peter Watts.txt" --book rifters
@@ -275,7 +256,7 @@ python -m src.api_server
 # 默认 0.0.0.0:8000
 ```
 
-### 5.3 前端 LLM 平台接入 (Cherry Studio, Windows 宿主)
+### 5.3 前端 LLM 平台接入 (e.g., Cherry Studio, Windows 宿主)
 
 1. 确保后端已启动: `python -m src.api_server` (监听 0.0.0.0:8000).
 2. Cherry Studio: 设置 -> 模型服务 -> 添加服务商 -> 选 OpenAI 兼容 (自定义).
@@ -305,7 +286,7 @@ curl -sN http://localhost:8000/v1/chat/completions \
 
 ## 6. 测试要点 (验收依据)
 
-| # | 验证项 | 预期 | 状态 (2026-08-09) |
+| # | 验证项 | 预期 | 状态 (2026-08-11) |
 |---|---|---|---|
 | 1 | POST /v1/chat/completions (非流式) | OpenAI 规范 JSON, choices[0].message.content 为回答 | ✅ 通过 (curl + Cherry Studio 真实问答) |
 | 2 | 同上 + stream:true | SSE 分块输出, 结尾 data: [DONE] | ✅ 通过 (curl 798 帧; Cherry Studio 默认流式无错) |
@@ -313,7 +294,7 @@ curl -sN http://localhost:8000/v1/chat/completions \
 | 4 | 多书隔离 | 不同 model 提问互不串台 | ✅ 通过 (test=Joel Kita, test2=Mermaid, 12 轮实验零串扰, workspace 隔离修复后) |
 | 5 | 不存在的 model | 404 语义错误且为 OpenAI error 结构 | ✅ 实测通过 (type=invalid_request_error, code=model_not_found) |
 | 6 | GET /healthz | {"status":"ok"} | ✅ 实测通过 |
-| 7 | GET /v1/models | 列出 storage 下已建库目录名 | ✅ 实测通过 (列出 test) |
+| 7 | GET /v1/models | 列出 storage 下已建库目录名 | ✅ 实测通过 (曾列出 test; 现全量库为 rifters) |
 | 8 | 同一 model 并发首访 | 仅实例化一次, 无重复初始化 (per-model 锁) | ⏳ 待并发验收 |
 | 9 | LRU 淘汰不中断在途查询 | 在途实例不被 finalize, 回答正常返回 | ⏳ 待并发验收 |
 | 10 | 流式中断 (客户端断开) | 无未处理异常, 日志无 CancelledError 泄漏 | ⏳ 待验收 |
@@ -341,3 +322,5 @@ curl -sN http://localhost:8000/v1/chat/completions \
 | 13 | .env 占位符未填 | config.py 启动即 _resolve_env 报错, 防止静默回退旧配置; 填真实值前不要运行 builder/api_server |
 | 14 | 免费档限流击穿 | 全量建图曾在 flush 阶段被 0.6b(free) 429 击穿 (vdb_* 缺失但 LLM 缓存完整). 已改免费优先+付费兜底 (FALLBACK_COOLDOWN); 重跑前务必把存档的 llm_response_cache 放回, 否则 DS 重新计费 |
 | 15 | 缓存档案 | 20MB LLM 响应缓存存于 Windows Downloads/rifters_cache_backup/; storage 内原文件勿删, 重跑前移回 storage/rifters/rifters/ |
+| 16 | provider 结构 | QUERY_BASE_URL/QUERY_API_KEY 与 EMBEDDING_BASE_URL/EMBEDDING_API_KEY 必填 (config.py _resolve_env 校验); KEYWORD/EXTRACT 的 *_BASE_URL/*_API_KEY 可选, 留空回退 QUERY |
+| 17 | 免费模型空置 | QUERY_FREE_MODEL / EMBEDDING_MODEL_FREE 留空 = 仅用付费 (config.py _FallbackCircuit has_free=False 恒付费); 付费模型名必填 |
