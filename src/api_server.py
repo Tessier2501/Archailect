@@ -138,15 +138,15 @@ async def _get_rag_instance(model: str) -> LightRAG:
 def build_rag_system_prompt(user_system_prompt: str) -> str:
     """包装用户 System Prompt, 使其在不丢失的前提下注入检索上下文.
 
-    背景: LightRAG 的 kg_query 会对传入的 system_prompt 强制调用
-          str.format(response_type=..., user_prompt=..., context_data=...)
-          (见 lightrag/operate.py 第 4288-4293 行).
-    因此必须:
-      1. 把用户原文的 { } 转义为 {{ }}, 否则会被 format 当作占位符,
-         要么吞掉检索上下文, 要么抛 KeyError;
-      2. 提供 {context_data} 占位符, 让 LightRAG 把检索到的书籍背景注入;
-      3. 提供 {user_prompt} 占位符, 兼容 QueryParam.user_prompt 附加指令.
-    这样用户系统提示词与检索上下文两条信息流都无损地进最终 prompt.
+    注意 (2026-08-12 提案 13 之后): 主链路已改为手动组装 merged_sys_prompt 并直调
+    LLM 封装器 (openai_complete_if_cache), 不再经 LightRAG kg_query 的 .format().
+    本函数保留为兼容工具/文档参考 (若未来回归 aquery 路径, 仍须用它做 { } 转义).
+
+    原理 (历史路径, 供 aquery 回归参考): LightRAG 的 kg_query 会对传入的
+    system_prompt 强制调用 str.format(response_type=..., user_prompt=...,
+    context_data=...). 那时必须把用户原文的 { } 转义为 {{ }}, 并提供
+    {context_data}/{user_prompt} 占位符, 否则检索上下文丢失或抛 KeyError.
+    本函数即为此形态的模板生成器.
     """
     escaped = user_system_prompt.replace("{", "{{").replace("}", "}}")
     return (
@@ -225,6 +225,102 @@ def _extract_last_user_query(messages: list[dict[str, Any]]) -> str:
                 if joined:
                     return joined
     raise HTTPException(status_code=400, detail="请求缺少有效的 user 消息")
+
+
+# ============================================================
+# 二.5, 聚焦查询改写 + 双路检索并集 (提案 13, 2026-08-12)
+# ============================================================
+# 根因 (七轮诊断收口): 用户原样反事实提问 (如 "为什么没做 X") 与答案段
+# (陈述句 "决定做 Y 因为...") 语义错配, 任何 embedding 下都召不回答案段.
+# 而对"聚焦的陈述化检索串" (实体名 + 具体属性 + 动作结果, 少而准) mix 链路
+# 能稳定命中 (chunk-104 = #3). 因此在本服务检索前用 QUERY 模型做聚焦改写,
+# 改写串负责检索, 生成仍对准用户原始问题.
+#
+# 关键约束 (第七轮复核实证 + 三测试回传修正):
+# - 保留原问题全部关键实体/事实;
+# - 仅做问题指向的"最小因果补全" (补全未做的替代决策), 禁止答案外想象
+#   (bioluminescence/warhead 等完整版 HyDE 失败形态);
+# - 输出只给检索串, 不解释.
+REWRITE_QUERY_SYS = (
+    "You rewrite a user's question into a focused English retrieval string "
+    "for a book knowledge base. Rules:\n"
+    "1. Keep ALL key entities and facts already present in the question.\n"
+    "2. Do NOT add imagined environment, attributes, or plot details not "
+    "mentioned in the question (e.g. biology, weapons, geology).\n"
+    "3. Perform the minimal causal completion the question demands: for "
+    "'why X did not do Y', you MUST include X's constraint AND the alternative "
+    "decision/action the counterfactual implies, using decision words such as "
+    "chose/decided/copy/move/relocate/disrupt/destroy (e.g. 'was programmed to "
+    "stop B but could not destroy it; chose to move a copy of B elsewhere "
+    "instead'). These decision words are needed to locate the decision passage; "
+    "you infer them from the question's logic, not from any corpus.\n"
+    "4. Remove the question's rhetorical shell; keep the semantic core "
+    "(who, what was not done, why).\n"
+    "5. Output ONLY the rewritten string, no explanation."
+)
+
+
+async def _rewrite_query(query: str) -> str:
+    """把用户问题改写为聚焦检索串 (提案 13). 失败回退原 query (fail-safe)."""
+    try:
+        llm = build_llm_func()
+        rewritten = await llm(query, system_prompt=REWRITE_QUERY_SYS)
+        rewritten = str(rewritten).strip()
+        return rewritten if rewritten else query
+    except Exception:
+        # fail-safe: 改写失败不阻断正常查询, 回退原始 query
+        return query
+
+
+async def _retrieve_union(
+    rag: LightRAG,
+    queries: list[str],
+    rerank_on: bool,
+) -> list[dict[str, Any]]:
+    """多检索串并行 (aquery_data) 合并候选池 (按 chunk_id 去重, 保持出现顺序).
+
+    双路并集 (提案 13): 改写串召回决策段, 原问题串召回卷二/三泛化情节,
+    合并后上下文更完整. 检索阶段 conversation_history 不参与 (1.5.6 仅生成
+    上下文, 已诊断验证); 关键词提取受 llm_response_cache 保护.
+    """
+    param = QueryParam(
+        mode="mix",
+        top_k=20,
+        chunk_top_k=12,
+        enable_rerank=rerank_on,
+        conversation_history=[],
+    )
+    results = await asyncio.gather(
+        *[rag.aquery_data(q, param=param) for q in queries],
+        return_exceptions=True,
+    )
+    seen: set[str] = set()
+    merged: list[dict[str, Any]] = []
+    for result in results:
+        if isinstance(result, BaseException):
+            continue
+        if not result.get("status") == "success":
+            continue
+        chunks = result.get("data", {}).get("chunks", [])
+        if not isinstance(chunks, list):
+            continue
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                continue
+            key = chunk.get("chunk_id") or chunk.get("content", "")
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(chunk)
+    return merged
+
+
+def _chunks_to_context(chunks: list[dict[str, Any]]) -> str:
+    """并集候选转 Knowledge Base Context 文本 (供生成提示词)."""
+    parts = []
+    for i, chunk in enumerate(chunks, start=1):
+        parts.append(f"[Chunk {i}] {chunk.get('content', '')}")
+    return "\n\n".join(parts)
 
 
 # ============================================================
@@ -394,28 +490,116 @@ async def chat_completions(req: ChatRequest) -> Any:
         history = _extract_conversation_history(req.messages)
         rag_system_prompt = build_rag_system_prompt(user_system_prompt)
 
-        # ---- 3. LightRAG 查询 ----
-        # mode=mix (kg+向量双通道): 反事实/字面不匹配问题增加向量召回路径
-        #   (诊断: Q2 naive 模式命中 17269 锚点, hybrid 图谱通道挤掉向量结果).
-        # top_k/chunk_top_k 显式调大: 提高因果/叙事细节原文 chunk 召回.
-        # enable_rerank: 未配置 rerank (env 三键任一为空) 时为 False,
-        #   消除 "Rerank enabled but no rerank model" 空转警告.
+        # ---- 3. 聚焦查询改写 + 双路检索并集 (提案 13) ----
+        # 检索前把用户问题改写为聚焦陈述检索串 (最小因果补全, 禁止答案外想象),
+        # 改回退原始 query (fail-safe). 改写串只负责召回候选; 生成仍对准原始问题.
+        # 双路并集: 改写串召回决策段 (Starfish chunk-104), 原问题串召回泛化情节,
+        # 按 chunk_id 去重合并, 上下文更完整.
         rerank_available = build_rerank_func() is not None
-        param = QueryParam(
-            mode="mix",
-            stream=req.stream,
-            top_k=20,
-            chunk_top_k=12,
-            enable_rerank=rerank_available,
-            conversation_history=history,
+        rewritten = await _rewrite_query(query)
+        try:
+            chunks = await _retrieve_union(
+                rag,
+                [query, rewritten] if rewritten != query else [query],
+                rerank_available,
+            )
+            context_data = _chunks_to_context(chunks)
+            if not context_data.strip():
+                context_data = "No relevant context found."
+        except HTTPException:
+            raise
+        except Exception:
+            # fail-safe: 检索并集异常退化为原 aquery 路径 (单路, 保持服务可用)
+            param = QueryParam(
+                mode="mix",
+                stream=req.stream,
+                top_k=20,
+                chunk_top_k=12,
+                enable_rerank=rerank_available,
+                conversation_history=history,
+            )
+            result = await rag.aquery(query, param=param, system_prompt=rag_system_prompt)
+
+            if req.stream:
+                return StreamingResponse(
+                    _stream_response(result, req.model),  # type: ignore[arg-type]
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            return _non_stream_response(str(result), req.model)
+
+        # 组装检索上下文到 system_prompt. 注意: 本路径绕过 LightRAG 的 kg_query
+        # (不再经 operate.py 的 str.format), 改由 LLM 封装器直接调
+        # openai_complete_if_cache — 故用户原文的 { } 无需转义 (原转义仅针对
+        # LightRAG .format() 路径, 见 build_rag_system_prompt 注释). 原始问题
+        # 作为生成输入 (query), 检索上下文经 system_prompt 注入.
+        merged_sys_prompt = (
+            "---User-defined Role---\n"
+            f"{user_system_prompt}\n\n"
+            "You MUST obey the role constraints defined above.\n"
+            "Then answer the user query, grounding on the knowledge base context "
+            "provided below when it is relevant.\n\n"
+            "---Knowledge Base Context---\n"
+            f"{context_data}"
         )
-        result = await rag.aquery(query, param=param, system_prompt=rag_system_prompt)
+
+        llm = build_llm_func()
+        result = await llm(
+            query,
+            system_prompt=merged_sys_prompt,
+            history_messages=history or None,
+        )
 
         # ---- 4. 响应格式: 流式 SSE / 非流式 JSON ----
         if req.stream:
-            # aquery stream=True 返回 AsyncIterator[str]
+            # 生成已完成 (非流式调用), 流式响应按单块扇出模拟
+            async def _single_chunk_stream() -> AsyncIterator[str]:
+                yield _sse_event(
+                    {
+                        "id": f"chatcmpl-{uuid.uuid4().hex}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": req.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant"},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+                yield _sse_event(
+                    {
+                        "id": f"chatcmpl-{uuid.uuid4().hex}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": req.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": str(result)},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+                yield _sse_event(
+                    {
+                        "id": f"chatcmpl-{uuid.uuid4().hex}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": req.model,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    }
+                )
+                yield "data: [DONE]\n\n"
+
             return StreamingResponse(
-                _stream_response(result, req.model),  # type: ignore[arg-type]
+                _single_chunk_stream(),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )

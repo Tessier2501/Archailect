@@ -79,8 +79,11 @@ async def main() -> None:
             if not content.strip():
                 raise ValueError(f"书籍文件为空: {txt}")
             # 1.5.6 签名: split_by_character 可控制分块; 默认即可
+            # file_paths=[str(txt)] (提案 6, 2026-08-12): 记录每个 chunk 的书源 path,
+            #   恢复按书过滤/书源量化能力 (存量 rifters 建于实施前, 仍为 unknown_source;
+            #   本改动仅影响此后新建的库).
             # 同一 rag/storage 依次插入, 多卷合并为一个知识库
-            await rag.ainsert(content)
+            await rag.ainsert(content, file_paths=[str(txt)])
             print(f"[OK] 已插入: {txt.name}")
     finally:
         await rag.finalize_storages()
