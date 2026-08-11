@@ -160,6 +160,99 @@ A (mix+调参), A.1 (rerank 12), B (conversation_history) 实施并重启后, �
 
 ---
 
+## 5.2 检索扩展实验: 提案 1 证伪 (2026-08-11 第四轮)
+
+### 实验设计 (scripts/probe_query_expansion.py, 经 IDE 评审修正)
+- 疑点 A 修正: 静态扩展臂只允许问题中已出现的词元或直译 (凝胶→gel, 核弹→nuke), 严禁答案侧词汇 (copy/move/decide 等), 否则实验自答式泄露且不可泛化; "自答式检索"合法形态 = 运行时 LLM 生成 (改写/HyDE), LLM 只见问题不见语料, 不构成泄露.
+- 疑点 B 修正: 基线 = 同脚本同进程同生产配置 (mix/top_k=20/chunk_top_k=12/rerank on) 的 Q_ORIG 臂; diagnose_q1_raw.py (hybrid/top_k=50) 不再作基线.
+
+### 结果 (四臂同口径对照)
+| 臂 | 检索串 | 锚点命中 |
+|---|---|---|
+| Q_ORIG 基线 | 用户原始反事实问题 | 0/3 |
+| 静态问题派生 | 仅问题词元+直译 | 0/3 |
+| LLM 改写 | 运行时陈述式改写 | 0/3 |
+| HyDE 假想段 | LLM 现场生成的假想答案段 | 0/3 |
+
+### 结论
+连语义上几乎等同答案转述的 HyDE 段也未能经向量通道带回锚点 chunk → **失败不在检索串措辞层, 而在 chunk 向量召回/候选合并层**. 实体/关系层四臂均正常召回 (55-57 entities, ~1000 relations), 最终 chunks 全为无关段落 → §2.2 "实体召回与 chunk 召回脱节"进一步坐实. 检索扩展 (提案 1) 证伪, 不接入生产. 下一步: 直接量化嵌入通道死活 (scripts/probe_embedding_channel.py, 见 IMPROVEMENTS.md 提案 8).
+
+---
+
+## 5.3 嵌入通道直测: embedding 语义弱 (2026-08-11 第五轮)
+
+### 方法与修正
+IDE agent 源码级定位: `vdb_chunks.json` 的 `data[i]["vector"]` 是 zlib 压缩 base64 快照, 非明文向量; 真向量在 `matrix` (base64, `buffer_string_to_array + reshape(-1, dim)`), 与 nano-vectordb `_cosine_query` 的 L2 归一化语义一致. 据此官方语义复算.
+
+### 结果 (锚点 chunk: 102=identity_17269, 104=choice_17337+answer_17345)
+| 查询 | chunk-102 | chunk-104 | top-12 |
+|---|---|---|---|
+| Q_ORIG 反事实 | 356/433 (0.4253) | 335/433 (0.4398) | MISS |
+| 静态问题派生 | 409/433 (0.2613) | 160/433 (0.4104) | MISS |
+| HyDE 假想段 | 422/433 (0.2979) | **37/433** (0.4542) | MISS |
+| Q2 对照 | 160/433 (0.3087) | 49/433 (0.3478) | MISS |
+
+### 结论
+连语义几乎等同答案的 HyDE 段, 锚点也进不了 naive top-12 → **合并/截断层没有机会挤出锚点, 排除"合并层淹没" (提案 9)**; 433 条 chunk 余弦 top 分值仅 0.26-0.45, 区分度整体弱 → **根因 = qwen3-embedding-0.6b 对长句科幻叙事+ß 变体表征不足 (embedding 语义弱)**, 指向换模型/混合召回 (提案 10).
+
+**Q2 矛盾澄清**: §2.2 "Q2 naive 命中 17269" 实为命中 `node1211_darkness` 锚点 ("since the Darkness", chunk-103 区域), 非 chunk-102/104 指纹; 故本轮 Q2 对照对 102/104 MISS 不构成矛盾, 且 chunk-104 在 Q2 下仍靠后不推翻结论.
+
+**下一步**: 重建前做尽职调查 (提案 12, scripts/probe_embed_broad.py) — 广度 (0.6b 是否全库普遍弱) + 维度 (4b/8b 是否 1024 免重建) + 对比试算 (4b/8b 锚点排名是否显著提升), 用数据拍板"换模型是否值得重建/换哪个/维度是否变".
+
+---
+
+## 5.4 尽职调查: 换 embedding 论据不足 (2026-08-11 第六轮)
+
+用户确认: 4b/8b 维度显著更高 (必重建, 但 llm_response_cache 已备份, 重建仅耗 embedding token). 实验聚焦广度+对比 (scripts/probe_embed_broad.py, 只读, 4b/8b 现场重嵌 433 chunk).
+
+### 结果
+1. **0.6b 全库广度基线 11/12 = 92%** — 唯一 MISS 恰是"反事实-Q1"探针. **0.6b 并非普遍弱, 仅对反事实/决策语义错配类问题弱** (符合用户痛点但非全库性问题).
+2. **Q1 锚点 top-12 对比** (chunk-102/104):
+
+| 查询 | 0.6b 现库 | 4b 重嵌 | 8b 重嵌 |
+|---|---|---|---|
+| Q_ORIG | MISS (356/335) | MISS (223/270) | MISS (221/259) |
+| 静态 | MISS | **HIT** (104=#9) | MISS (104=#42) |
+| HyDE | **HIT** (104=#10) | **HIT** (104=#1) | **HIT** (104=#1) |
+| Q2对照 | MISS (160/49) | **HIT** (102=#4, 104=#10) | **HIT** (102=#5, 104=#15) |
+
+### IDE 交叉发现 (两处矛盾, 推翻第五轮初步判定)
+- **① HyDE 0.6b 纯向量已 HIT (#10), 但第四轮 LightRAG mix 链路 HyDE 臂 0/3 MISS** → 真向量通道对陈述化 HyDE 串**能**召回 chunk-104, 疑似 **mix 链路在实体+关系合并/截断时丢掉了向量召回** (指向提案 9 合并层, 非 embedding 弱). 但两处 HyDE 串文本不同 (第四轮运行时完整段 / 第六轮拼接版), 口径未锁, 需同串对照复核.
+- **② Q_ORIG 在任何模型下都 MISS** (102/104 均在 #220 后) → **换 embedding 解决不了用户原样反事实提问**; 4b/8b 增益顶点在 Q2对照/静态臂 (非真实痛点形态). 真正对症的是 **HyDE/陈述化改写** (0.6b 已够, 4b/8b 仅 #10→#1 边际提升).
+
+### 结论
+换 embedding 整体论据不足: 广度 92% 全库健康 + Q_ORIG 三模型全 MISS + HyDE 0.6b 已 HIT. **新关键问题**: 既然纯向量 0.6b+HyDE 能 HIT (#10), 为何 LightRAG 完整链路丢锚点? 下一步**裁决 mix 链路向量召回在合并/截断的去向** (提案 9 复核), 而非直接重建.
+
+---
+
+## 5.5 合并层 vs 语义裁决 (2026-08-11 第七轮, 进行中)
+
+为锁定 §5.4 ①的口径矛盾 (三次 HyDE 串互不相同: 第四轮运行时完整段 / 第五轮硬编码截断版 / 第六轮拼接版), 用 scripts/probe_merge_vs_semantic.py **固定同一 HyDE 串**, 同进程三通道对照:
+- A. 纯向量余弦 (绕过 LightRAG, 直接对 vdb 矩阵 top-12)
+- B. aquery_data naive (LightRAG 纯向量检索, 无合并)
+- C. aquery_data mix (生产链路, 实体+关系+向量合并)
+
+判定: A HIT+B HIT+C MISS → 合并层淹没 (提案 9, 对症=查询改写+混合召回, 0 重建); A HIT+B MISS → naive 检索内部丢 (查索引/参数); A MISS → embedding 语义弱 (维持换模型).
+
+### 结果 (固定同一拼接版 HyDE 串, 三通道同进程)
+- A 纯向量余弦: **HIT** (chunk-104=#10)
+- B naive 检索: **HIT** (chunk-104=#10)
+- C mix 生产链路: **HIT** (chunk-104=**#3**) — 实体+关系合并未挤掉向量召回, 反而抬到第 3
+→ **推翻提案 8 "锚点进不了 top-12" 与提案 9 "已排除" 在 HyDE 陈述形态下的前提; "embedding 语义弱"在此形态不成立; 换 4b/8b 仅 #10→#1 边际收益, 无需重建.**
+
+### 复核 (用户指示, 排除检索随机性): 完整版 vs 拼接版同进程 mix 对照
+- 第四轮运行时**完整版** HyDE 段 (含 bioluminescence/nuclear warhead/methane hydrate 等想象延伸词): 3 次重跑 **全 MISS**; query nodes 含大量延伸词, Local query 990 relations, 噪声实体/关系把检索引向 Behemoth 生态邻域, 双重淹没答案段.
+- 第六轮**拼接版** (仅前两句, hyper-specific/calibrated/electromagnetic/metabolic/weapon/trigger): 同进程 **#1 HIT**; query nodes 精确聚焦, 481 relations.
+- 结论: **文本差异归因成立, 检索随机性排除**. 第四轮 "HyDE 0/3 MISS" 非机制失效, 而是该轮 LLM 生成的完整版含过多想象延伸内容把检索引偏. **机制 (HyDE/陈述化改写) 有效, 关键在生成内容的精度/聚焦度.**
+
+### 最终结论 (七轮诊断收口)
+- 根因: 用户原样反事实提问 (Q_ORIG) 在任何 embedding 下都检索不到答案段 (语义错配); 但**陈述化/聚焦的检索串能稳定命中** (mix 链路 #3, 纯向量 #10).
+- 对症方案 = **生产端查询改写**: 检索前把反事实问句改写为"仅基于问题实体与事实、禁止想象延伸"的聚焦陈述检索串, 配合现有 mix 链路即可命中. **0 重建, 每查询 +1 次短 LLM 改写调用.**
+- 证伪/排除: 换 embedding (提案 10, 论据不足)、合并层调权 (提案 9, mix #3 显示无害) 均无必要.
+- 生产改写指令关键约束: **禁止想象延伸/补充背景/推演**, 仅聚焦"实体名 + 具体属性 + 动作结果" (拼接版形态), 避免重建第四轮完整版的高噪声误例.
+
+---
+
 ## 6. 诊断产物
 
 | 文件 | 状态 | 说明 |
@@ -169,4 +262,8 @@ A (mix+调参), A.1 (rerank 12), B (conversation_history) 实施并重启后, �
 | scripts/diagnose_q1_current.py | 保留 | §5.1 复测脚本: 当前生产配置复测 Q1 答案锚点 |
 | scripts/diagnose_q1_rerank_ab.py | 保留 | §5.1 第三轮: rerank off/on ×3 对照, 排除 rerank 挤出锚点 |
 | scripts/diagnose_q1_raw.py | 保留 | §5.1 第三轮: 原始候选池 (top_k=50) 锚点验证, 判定召回层失败 |
+| scripts/probe_query_expansion.py | 保留 | §5.2 第四轮: 检索扩展四臂对照, 提案 1 证伪 |
+| scripts/probe_embedding_channel.py | 保留 | §5.3 第五轮: 嵌入通道余弦排名直测, 判 embedding 语义弱 |
+| scripts/probe_embed_broad.py | 保留 | §5.4 第六轮: 广度基线 11/12 + 4b/8b 重嵌对比, 换模型论据不足 |
+| scripts/probe_merge_vs_semantic.py | 保留 | §5.5 第七轮: 固定 HyDE 串三通道对照, 裁决合并层 vs 语义 |
 | scripts/check_filepath.py | 已删除 | 一次性 file_path 验证脚本 |
