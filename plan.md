@@ -5,6 +5,7 @@
 > 权威代码: 全部实现以 src/ 目录下的源码为准, 本文档不内嵌参考代码, 以避免文档与源码漂移.
 > 更新记录: 2026-08-09 全链路验证通过 (主模型切 DS 官方, 嵌入切 qwen3-embedding-0.6b(free), 测试建图+端到端查询成功); Cherry Studio 接入指南并入 §5.3.
 > 更新记录: 2026-08-10 Cherry Studio (Windows 宿主) 全链路验证通过 (连通性 404 判读 + 真实问答双确认); 新增长期诊断服务 src/debug_server.py (model=debug, 独立 8001 端口, 见 §5.1.1), 日志持久化到 logs/.
+> 更新记录: 2026-08-11 全量建图遇 free 嵌入 429 击穿 (flush 阶段 RateLimitError; 三卷 LLM 提取已完成但向量库缺失); 20MB LLM 响应缓存已存档到 Windows Downloads 以保重跑零 DS 消耗; 架构改为统一 Cherry 网关, LLM 与 Embedding 均免费优先、付费兜底 (config.py fallback 状态机; .env 占位符待填).
 
 ---
 
@@ -215,8 +216,9 @@ async def openai_complete_if_cache(
 
 ### 5.1 当前状态 (2026-08-09 实测)
 
-- 主模型已切 DeepSeek 官方 API: DEEPSEEK_BASE_URL=https://api.deepseek.com, DEEPSEEK_MODEL=deepseek-v4-flash (官方模型名, 不带 "deepseek/" 前缀).
-- 嵌入模型已切 qwen3-embedding-0.6b(free) (cherryin 免费档, 1024 维), EMBEDDING_DIM=1024.
+- 架构 (2026-08-11): 统一 Cherry 网关. LLM 与 Embedding 均免费优先 (LLM_FREE_MODEL / EMBEDDING_MODEL_FREE), 被 429/限流后触发付费兜底 (LLM_PAID_MODEL / EMBEDDING_MODEL_PAID), FALLBACK_COOLDOWN 秒内走付费, 冷却后自动回免费. .env 用占位符 <...>, 用户手动填真实密钥/模型名.
+- 全量建图失败记录 (2026-08-11): 三卷 LLM 提取全部成功 (缓存 20MB 已存档到 Windows Downloads 的 rifters_cache_backup/), 但嵌入在 flush 阶段被 0.6b(free) 429 击穿, vdb_* 缺失. 重跑方案: 备份缓存放回 storage/rifters/rifters/ 后清空重建, LLM extract 全部缓存命中 (DS 零消耗), 仅 embedding 重跑.
+- 测试库状态: storage/test/、storage/test2/ 可用 (workspace=test/test2, 路径 storage/{book}/{book}/).
 - 测试文本建图实验成功: 250 行切片 -> 51 entities / 73 relations, 索引完整 (graphml + kv_store_* + vdb_*.json), 日志无 "Failed to extract".
 - 端到端查询验收全通: 非流式/流式 SSE/System Prompt 透传/404 错误结构/模型列表/健康检查, 详见 §6.
 - 已修复两个代码缺陷: config.py load_dotenv(override=True); api_server.py 构造后 await initialize_storages().
@@ -249,14 +251,16 @@ python --version
 pip install /tmp/lr_1_5_6/lightrag_hku-1.5.6-py3-none-any.whl
 pip install -r requirements.txt
 
-# 4. 配置环境变量 (.env 已存在且含真实配置; 新环境按如下键名手动创建):
-#   - DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL=https://api.deepseek.com, DEEPSEEK_MODEL=deepseek-v4-flash
-#   - EMBEDDING_BASE_URL=https://open.cherryin.ai/v1, EMBEDDING_API_KEY, EMBEDDING_MODEL=qwen/qwen3-embedding-0.6b(free)
-#   - EMBEDDING_DIM=1024, EMBEDDING_MAX_TOKEN_SIZE=32768
-#   - LLM_TIMEOUT=900 (lightrag-hku 读取, 默认 240; 建图曾因 cherryin 响应慢触发 480s worker 超时失败, 需调大)
-#   - RAG_CACHE_MAX=8
-#   注意: DEEPSEEK_MODEL 不带 "deepseek/" 前缀 (官方 API 只认 deepseek-v4-flash/deepseek-v4-pro);
-#         EMBEDDING_DIM 必须与实际模型维度一致 (0.6b=1024), 否则 nano-vectordb 维度校验失败.
+# 4. 配置环境变量 (.env 已改为占位符模板, 用户手动填入真实值后 config.py 的 _resolve_env 校验):
+#   - CHERRY_BASE_URL=https://open.cherryin.ai/v1, CHERRY_API_KEY=<cherry key>
+#   - LLM_FREE_MODEL=<free LLM 名>, LLM_PAID_MODEL=<paid LLM 名>
+#   - EMBEDDING_MODEL_FREE=<free 嵌入名, 如 qwen/qwen3-embedding-0.6b(free)>,
+#     EMBEDDING_MODEL_PAID=<paid 嵌入名, 如 qwen/qwen3-embedding-0.6b>
+#   - EMBEDDING_DIM=1024 (free/paid 必须同模型同维度), EMBEDDING_MAX_TOKEN_SIZE=32768
+#   - FALLBACK_COOLDOWN=60 (免费被限流后切付费的冷却秒数)
+#   - LLM_TIMEOUT=900, RAG_CACHE_MAX=8
+#   注意: 未填占位符时 config.py 启动即报错 (防止静默回退旧默认值);
+#         免费/付费嵌入必须同模型同向量维度, 向量才可混用.
 
 # 5. 放置书籍 txt 到 data/ 目录 (已有 Rifters 三卷)
 
@@ -334,3 +338,6 @@ curl -sN http://localhost:8000/v1/chat/completions \
 | 10 | DS 官方 API 模型名 | 不带 "deepseek/" 前缀 (deepseek-v4-flash / deepseek-v4-pro); cherryin 前缀名在官方 API 报 400 (已实测) |
 | 11 | 推理模型 thinking | DS v4-flash 流式含 <think> 推理帧; 非流式 content 不含. 前端若需过滤 thinking, 在响应层处理 |
 | 12 | 服务无鉴权 | 仅限本机/VSCode 转发; 远程暴露需前置鉴权或绑定 127.0.0.1 + 反向代理 |
+| 13 | .env 占位符未填 | config.py 启动即 _resolve_env 报错, 防止静默回退旧配置; 填真实值前不要运行 builder/api_server |
+| 14 | 免费档限流击穿 | 全量建图曾在 flush 阶段被 0.6b(free) 429 击穿 (vdb_* 缺失但 LLM 缓存完整). 已改免费优先+付费兜底 (FALLBACK_COOLDOWN); 重跑前务必把存档的 llm_response_cache 放回, 否则 DS 重新计费 |
+| 15 | 缓存档案 | 20MB LLM 响应缓存存于 Windows Downloads/rifters_cache_backup/; storage 内原文件勿删, 重跑前移回 storage/rifters/rifters/ |
