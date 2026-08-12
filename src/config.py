@@ -1,14 +1,17 @@
 """集中管理环境变量, 并提供 LLM / Embedding 工厂函数.
 
-架构 (2026-08-11):
-- LLM 分角色: QUERY (主, 必填) / KEYWORD / EXTRACT (可选, 空=回退 QUERY).
+架构 (2026-08-12 重构, 适配双 provider):
+- LLM 分角色: QUERY (主, 必填) / KEYWORD / EXTRACT (可选, 任意一者缺失即回退 QUERY).
   每个已配置角色均有 free/paid 双档 + 独立 fallback 电路:
-  免费优先 → 429/限流后"仅当次"退付费 (见 _FallbackCircuit), 下次自动回免费.
-- KEYWORD/EXTRACT 未配置时返回 None → LightRAG 回退到 base llm_model_func
-  (=QUERY wrapper, QUERY 代劳).
-- Provider: QUERY_BASE_URL/QUERY_API_KEY 与 EMBEDDING_BASE_URL/EMBEDDING_API_KEY
-  必填; KEYWORD/EXTRACT 可选, 各自可配独立 provider (缺省回退 QUERY).
-- Embedding 免费优先+付费兜底, 同模型同维度可混用.
+  免费优先 → 429/限流后"仅当次"退付费 → 下次自动回免费 (见 _FallbackCircuit).
+- QUERY 双 provider (新 .env 结构):
+  free 档 = QUERY_FREE_BASE_URL + QUERY_FREE_API_KEY + QUERY_FREE_MODEL (三键全非空才启用免费档);
+  paid 档 = QUERY_PAID_BASE_URL + QUERY_PAID_API_KEY + QUERY_PAID_MODEL (必填).
+  免费档 (如 cherryin) 429 → 整组切到付费档 (如 DS 官方) — URL/Key/Model 一起切换.
+- KEYWORD/EXTRACT 合并键 (键名含 `/`, 如 KEYWORD/EXTRACT_FREE_BASE_URL):
+  model/api/url 任一空 → 该档回退 QUERY 对应档; 双 model 均空 → 角色不配置 (QUERY 代劳).
+- Provider 校验: QUERY_PAID_* 与 EMBEDDING_* / RERANK_* 必填; 其余可选.
+- Embedding 免费优先 + 付费兜底, 同模型同维度可混用 (仍单 provider 双 model).
 """
 from __future__ import annotations
 
@@ -56,37 +59,37 @@ def _resolve_env(name: str) -> str:
 
 
 def _opt_env(name: str) -> str:
-    """读取可选环境变量: 空串或缺失返回空 (用于可选角色/免费模型)."""
+    """读取可选环境变量: 空串或缺失返回空 (用于可选角色/免费档)."""
     return os.getenv(name, "").strip()
 
 
 # ============================================================
-# Provider 配置: QUERY (主 LLM) 与 Embedding 独立必填
+# QUERY 双 provider: free 档 (cherryin) + paid 档 (DS 官方)
+# free 档三键全非空才启用; paid 档必填
 # ============================================================
-QUERY_BASE_URL = _resolve_env("QUERY_BASE_URL")
-QUERY_API_KEY = _resolve_env("QUERY_API_KEY")
-EMBEDDING_BASE_URL = _resolve_env("EMBEDDING_BASE_URL")
-EMBEDDING_API_KEY = _resolve_env("EMBEDDING_API_KEY")
-
-# ============================================================
-# LLM 角色 provider: KEYWORD/EXTRACT 可选, 缺省回退 QUERY
-# ============================================================
-KEYWORD_BASE_URL = _opt_env("KEYWORD_BASE_URL") or QUERY_BASE_URL
-KEYWORD_API_KEY = _opt_env("KEYWORD_API_KEY") or QUERY_API_KEY
-EXTRACT_BASE_URL = _opt_env("EXTRACT_BASE_URL") or QUERY_BASE_URL
-EXTRACT_API_KEY = _opt_env("EXTRACT_API_KEY") or QUERY_API_KEY
-
-# ============================================================
-# LLM 角色模型配置
-# QUERY 必填; KEYWORD/EXTRACT 可选 (空 = 回退 QUERY)
-# ============================================================
+QUERY_FREE_BASE_URL = _opt_env("QUERY_FREE_BASE_URL")
+QUERY_FREE_API_KEY = _opt_env("QUERY_FREE_API_KEY")
 QUERY_FREE_MODEL = _opt_env("QUERY_FREE_MODEL")
+
+QUERY_PAID_BASE_URL = _resolve_env("QUERY_PAID_BASE_URL")
+QUERY_PAID_API_KEY = _resolve_env("QUERY_PAID_API_KEY")
 QUERY_PAID_MODEL = _resolve_env("QUERY_PAID_MODEL")
 
-KEYWORD_FREE_MODEL = _opt_env("KEYWORD_FREE_MODEL")
-KEYWORD_PAID_MODEL = _opt_env("KEYWORD_PAID_MODEL")
-EXTRACT_FREE_MODEL = _opt_env("EXTRACT_FREE_MODEL")
-EXTRACT_PAID_MODEL = _opt_env("EXTRACT_PAID_MODEL")
+# free 档是否存在: 三键全非空 (防半配置, 任缺 → 恒付费)
+_HAS_QUERY_FREE = bool(
+    QUERY_FREE_BASE_URL and QUERY_FREE_API_KEY and QUERY_FREE_MODEL
+)
+
+# ============================================================
+# 角色合并键 (KEYWORD/EXTRACT 共用, 键名含 '/')
+# model/api/url 任一空 → 该档回退 QUERY 对应档; 双 model 空 → 角色不配置
+# ============================================================
+KEYWORD_EXTRACT_FREE_BASE_URL = _opt_env("KEYWORD/EXTRACT_FREE_BASE_URL")
+KEYWORD_EXTRACT_FREE_API_KEY = _opt_env("KEYWORD/EXTRACT_FREE_API_KEY")
+KEYWORD_EXTRACT_FREE_MODEL = _opt_env("KEYWORD/EXTRACT_FREE_MODEL")
+KEYWORD_EXTRACT_PAID_BASE_URL = _opt_env("KEYWORD/EXTRACT_PAID_BASE_URL")
+KEYWORD_EXTRACT_PAID_API_KEY = _opt_env("KEYWORD/EXTRACT_PAID_API_KEY")
+KEYWORD_EXTRACT_PAID_MODEL = _opt_env("KEYWORD/EXTRACT_PAID_MODEL")
 
 # 角色低强度思考: 仅当非空时注入 (可选 low/minimal/medium/high).
 # 留空 = 不注入, 保持 QUERY 思考模型默认行为. DESIGN: KEYWORD/EXTRACT 为短任务,
@@ -94,6 +97,11 @@ EXTRACT_PAID_MODEL = _opt_env("EXTRACT_PAID_MODEL")
 KEYWORD_REASONING_EFFORT = _opt_env("KEYWORD_REASONING_EFFORT")
 EXTRACT_REASONING_EFFORT = _opt_env("EXTRACT_REASONING_EFFORT")
 
+# ============================================================
+# Embedding (单 provider 双 model, 免费优先 + 付费兜底)
+# ============================================================
+EMBEDDING_BASE_URL = _resolve_env("EMBEDDING_BASE_URL")
+EMBEDDING_API_KEY = _resolve_env("EMBEDDING_API_KEY")
 EMBEDDING_MODEL_FREE = _opt_env("EMBEDDING_MODEL_FREE")
 EMBEDDING_MODEL_PAID = _resolve_env("EMBEDDING_MODEL_PAID")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
@@ -105,7 +113,7 @@ FALLBACK_COOLDOWN = float(os.getenv("FALLBACK_COOLDOWN", "60"))
 # 免费/付费双档状态机 (线程安全)
 # ============================================================
 class _FallbackCircuit:
-    """免费优先; has_free=False 时恒用付费 (免费模型空置场景).
+    """免费优先; has_free=False 时恒用付费 (免费档空置场景).
 
     严格"仅当次回退"语义 (2026-08-11 用户确认):
     - 默认每调用都先试免费 (无冷却窗口).
@@ -135,21 +143,53 @@ class _FallbackCircuit:
             self._paid_once = True
 
 
+# ============================================================
+# 档位三元组解析 (base_url, api_key, model)
+# ============================================================
+def _query_tier_triple(tier: str) -> tuple[str, str, str]:
+    """QUERY 档位三元组. free 档缺失时返回付费档 (恒付费语义)."""
+    if tier == "FREE" and _HAS_QUERY_FREE:
+        return QUERY_FREE_BASE_URL, QUERY_FREE_API_KEY, QUERY_FREE_MODEL
+    return QUERY_PAID_BASE_URL, QUERY_PAID_API_KEY, QUERY_PAID_MODEL
+
+
+def _role_tier_triple(prefix: str, tier: str) -> tuple[str, str, str]:
+    """角色档位三元组: 自身三键任一空 → 回退 QUERY 对应档 (用户 2026-08-12 确认)."""
+    url = _opt_env(f"{prefix}_{tier}_BASE_URL")
+    key = _opt_env(f"{prefix}_{tier}_API_KEY")
+    model = _opt_env(f"{prefix}_{tier}_MODEL")
+    if url and key and model:
+        return url, key, model
+    return _query_tier_triple(tier)
+
+
+def _role_configured(prefix: str) -> bool:
+    """角色是否配置: 双档 model 任一非空即配置; 均空 → QUERY 代劳."""
+    return bool(
+        _opt_env(f"{prefix}_FREE_MODEL") or _opt_env(f"{prefix}_PAID_MODEL")
+    )
+
+
+# ============================================================
+# LLM 封装: 双三元组 (free / paid), 整组切换 provider
+# ============================================================
 def _make_llm_wrapper(
-    base_url: str,
-    api_key: str,
-    free_model: str | None,
-    paid_model: str,
+    free: tuple[str, str, str] | None,
+    paid: tuple[str, str, str],
     circuit: _FallbackCircuit,
     reasoning_effort: str | None = None,
 ) -> Callable[..., Any]:
-    """构造一个带 free/paid fallback 的 LLM 异步包装函数.
+    """构造一个带 free/paid 整组 fallback 的 LLM 异步包装函数.
 
-    供 LightRAG 的 llm_model_func 或 role_llm_configs 使用 (角色角色).
-    free_model=None 时直接用 paid.
-    reasoning_effort: 可选 (low/minimal/medium/high), 仅当非空时注入请求体;
-      空/None 保持现状 (不注入任何字段). 用于 KEYWORD/EXTRACT 等短任务
-      压缩思考以省 token/提速 (QUERY 生成通道不配, 保留默认思考).
+    供 LightRAG 的 llm_model_func 或 role_llm_configs 使用.
+    - free: (base_url, api_key, model) | None; None/缺失 → 恒用 paid.
+    - paid: (base_url, api_key, model); 兜底用.
+    - 按 circuit.should_use_paid() 选择整组 (URL+Key+Model 一起切),
+      免费 429 → trip() → 仅当次切 paid, 下次自动回免费.
+    - reasoning_effort: 可选 (low/minimal/medium/high), 仅当非空时注入请求体;
+      用于 KEYWORD/EXTRACT 等短任务压缩思考 (QUERY 生成通道不配, 保留默认思考).
+    - 关键: 显式过滤调用方传入的 base_url/api_key/model, 防止 lightrag
+      role_llm_configs 的 kwargs 覆盖本函数选定的 provider 档位 (免费优先不能被覆盖).
     """
 
     async def _wrapper(
@@ -158,8 +198,13 @@ def _make_llm_wrapper(
         history_messages: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> str:
+        # 显式过滤 provider 覆盖字段: 档位选择由本 wrapper 唯一决定
+        kwargs.pop("base_url", None)
+        kwargs.pop("api_key", None)
+        kwargs.pop("model", None)
+
         use_paid = circuit.should_use_paid()
-        model = paid_model if use_paid else free_model
+        base_url, api_key, model = paid if use_paid else (free or paid)
         call_kwargs = {
             "prompt": prompt,
             "model": model,
@@ -169,8 +214,8 @@ def _make_llm_wrapper(
             "history_messages": history_messages,
             **kwargs,
         }
-        # 仅当显式配置 reasoning_effort 时注入 (沿用复用 writer 的 kwargs 透传,
-        # openai_complete_if_cache 的 **kwargs 直通 chat.completions.create).
+        # 仅当显式配置 reasoning_effort 时注入 (openai_complete_if_cache 的
+        # **kwargs 直通 chat.completions.create).
         if reasoning_effort:
             call_kwargs["reasoning_effort"] = reasoning_effort
         try:
@@ -178,21 +223,22 @@ def _make_llm_wrapper(
         except Exception:
             # openai SDK 已对 429 内建重试; 这里捕获重试耗尽后的限流, 付费兜底.
             circuit.trip()
-            call_kwargs["model"] = paid_model
+            base_url, api_key, model = paid
+            call_kwargs["base_url"] = base_url
+            call_kwargs["api_key"] = api_key
+            call_kwargs["model"] = model
             return await openai_complete_if_cache(**call_kwargs)
 
     return _wrapper
 
 
 # ---- 各角色电路 ----
-_QUERY_CIRCUIT = _FallbackCircuit(FALLBACK_COOLDOWN, has_free=bool(QUERY_FREE_MODEL))
-_KEYWORD_CIRCUIT = _FallbackCircuit(
-    FALLBACK_COOLDOWN, has_free=bool(KEYWORD_FREE_MODEL)
+_QUERY_CIRCUIT = _FallbackCircuit(FALLBACK_COOLDOWN, has_free=_HAS_QUERY_FREE)
+_KEYWORD_CIRCUIT = _FallbackCircuit(FALLBACK_COOLDOWN, has_free=_HAS_QUERY_FREE)
+_EXTRACT_CIRCUIT = _FallbackCircuit(FALLBACK_COOLDOWN, has_free=_HAS_QUERY_FREE)
+_EMBED_FALLBACK = _FallbackCircuit(
+    FALLBACK_COOLDOWN, has_free=bool(EMBEDDING_MODEL_FREE)
 )
-_EXTRACT_CIRCUIT = _FallbackCircuit(
-    FALLBACK_COOLDOWN, has_free=bool(EXTRACT_FREE_MODEL)
-)
-_EMBED_FALLBACK = _FallbackCircuit(FALLBACK_COOLDOWN, has_free=bool(EMBEDDING_MODEL_FREE))
 
 # ============================================================
 # Rerank (可选, 免费优先 + 付费兜底; 三键任一为空 = 不启用)
@@ -260,12 +306,10 @@ def build_rerank_func() -> Callable[..., Any] | None:
 
 
 def build_llm_func():
-    """返回 QUERY 主模型的 LightRAG llm_model_func (用 QUERY 独立 provider)."""
+    """返回 QUERY 主模型的 LightRAG llm_model_func (免费档 cherryin → 付费档 DS)."""
     return _make_llm_wrapper(
-        base_url=QUERY_BASE_URL,
-        api_key=QUERY_API_KEY,
-        free_model=QUERY_FREE_MODEL if QUERY_FREE_MODEL else None,
-        paid_model=QUERY_PAID_MODEL,
+        free=_query_tier_triple("FREE") if _HAS_QUERY_FREE else None,
+        paid=_query_tier_triple("PAID"),
         circuit=_QUERY_CIRCUIT,
     )
 
@@ -274,36 +318,34 @@ def build_role_llm_configs() -> dict[str, Any] | None:
     """构造 LightRAG 的 role_llm_configs (仅含已配置的 KEYWORD/EXTRACT 角色).
 
     未配置的角色返回 None → LightRAG 回退到 base llm_model_func (QUERY).
+    角色键: model/api/url 任一空 → 该档回退 QUERY 对应档 (见 _role_tier_triple).
     """
     configs: dict[str, Any] = {}
-    if KEYWORD_FREE_MODEL or KEYWORD_PAID_MODEL:
+    prefix = "KEYWORD/EXTRACT"
+
+    if _role_configured(prefix):
         configs["keyword"] = {
             "func": _make_llm_wrapper(
-                base_url=KEYWORD_BASE_URL,
-                api_key=KEYWORD_API_KEY,
-                free_model=KEYWORD_FREE_MODEL if KEYWORD_FREE_MODEL else None,
-                paid_model=KEYWORD_PAID_MODEL or QUERY_PAID_MODEL,
+                free=_role_tier_triple(prefix, "FREE"),
+                paid=_role_tier_triple(prefix, "PAID"),
                 circuit=_KEYWORD_CIRCUIT,
                 reasoning_effort=KEYWORD_REASONING_EFFORT or None,
             ),
             "kwargs": {
-                "base_url": KEYWORD_BASE_URL,
-                "api_key": KEYWORD_API_KEY,
+                "base_url": _role_tier_triple(prefix, "PAID")[0],
+                "api_key": _role_tier_triple(prefix, "PAID")[1],
             },
         }
-    if EXTRACT_FREE_MODEL or EXTRACT_PAID_MODEL:
         configs["extract"] = {
             "func": _make_llm_wrapper(
-                base_url=EXTRACT_BASE_URL,
-                api_key=EXTRACT_API_KEY,
-                free_model=EXTRACT_FREE_MODEL if EXTRACT_FREE_MODEL else None,
-                paid_model=EXTRACT_PAID_MODEL or QUERY_PAID_MODEL,
+                free=_role_tier_triple(prefix, "FREE"),
+                paid=_role_tier_triple(prefix, "PAID"),
                 circuit=_EXTRACT_CIRCUIT,
                 reasoning_effort=EXTRACT_REASONING_EFFORT or None,
             ),
             "kwargs": {
-                "base_url": EXTRACT_BASE_URL,
-                "api_key": EXTRACT_API_KEY,
+                "base_url": _role_tier_triple(prefix, "PAID")[0],
+                "api_key": _role_tier_triple(prefix, "PAID")[1],
             },
         }
     return configs if configs else None

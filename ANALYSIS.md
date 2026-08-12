@@ -21,7 +21,7 @@ RAG 在以下三类问题上表现缺陷, 实际使用中暴露:
 
 | 形态 | 现象 | 本质 |
 |---|---|---|
-| 反事实/矛盾式提问 | 问"为什么某物被编程做 X 却未做 Y"时答"该物不存在"或答无依据 | 问句与答案段语义结构错配 (问句矛盾-解释 vs 答案陈述), 检索串与答案字面/语义双不匹配 |
+| 反事实/矛盾式提问 | 问"为什么某物应当 X 却未 Y"时答"该物不存在"或答无依据 | 问句与答案段语义结构错配, 检索串与答案字面/语义双不匹配 |
 | 多轮指代 | 追问"它为什么没做..."时丢失前文所指 | 对话历史不参与检索 (框架限制), 指代需在改写层合并 |
 | 宽泛问题 | 回答引入无关信息或错排情节 | 宽泛问题两路检索均召回大量泛化段落, 核心段被稀释 |
 
@@ -155,3 +155,55 @@ asyncio 单线程下检查-赋值无交错点, 字典写入原子, 竞态不成�
   - 多轮澄清: 指代应生效且不破坏简单问题;
   - 宽泛问题: 应抓住重点, 少无关信息, 情节排列合理.
 - 清理: scripts/ 诊断脚本已全部删除 (git 历史保留); /tmp 本项目建设临时文件已清除; ANALYSIS.md 为本全案唯一文档, README.md 为运维权威.
+
+---
+
+## 9. 运维实战档案 (2026-08-12 晚: Pushing Ice 建库)
+
+### 9.1 双库就绪
+
+- `storage/rifters/` (Rifters 三卷) 与 `storage/pushing-ice/` (Pushing Ice 单卷) 均已建成; 主 LLM 已切 DS 官方 API (`api.deepseek.com`, `deepseek-v4-flash`, 免费档留空=仅付费), embedding/rerank 仍用 cherryin。
+
+### 9.2 建库两次失败记录
+
+| 轮 | 现象 | 根因 |
+|---|---|---|
+| 1 | cherryin 全通道 429 (all candidate channels are rate limited) → chunk-128 实体提取被 SDK 无限退避卡住 → 超 lightrag 1800s worker 上限 → 整篇 `failed` (`kg_write_state=pre_graph`), graphml 从未生成 | 上游限流风暴; lightrag worker 硬超时 (非 env `LLM_TIMEOUT` 可调, 日志 `Worker execution timeout` 来自 utils.py WorkerTimeoutError) |
+| 2 | 重跑日志 `WARNING: No new unique documents were found`, 进程立即退出 | lightrag `ainsert` 去重**只按 doc_id 是否已在 doc_status 中** (`json_doc_status_impl.filter_keys = set(keys) - set(data.keys())`), 不看状态 → `failed` 文档永不自动重试 |
+
+### 9.3 B-1 续跑方案 (已实测, 最小计费)
+
+**原理**: 去重只看 doc_status 中 doc_id 存在性 → 删除该 doc 的 doc_status 记录 (含 `dup-*` 残留), 即可让 `ainsert` 重新接纳, 从分块后重新抽取。
+
+**步骤** (已成功执行于 pushing-ice):
+1. 备份 `kv_store_llm_response_cache.json` (5.9MB extract 缓存, **核心资产**; 先备份到库外如 Windows Downloads) 与 `kv_store_doc_status.json` (回滚保障)。
+2. 删 doc_status 中该 doc_id 记录 + 其 `dup-*` 残留 (filename 重复记录, 由第二轮 "No new unique documents" 生成)。
+3. 重跑 builder → 按内容哈希命中旧缓存 → **前 127/230 chunk 实体抽取零计费**, 仅剩余 ~103 chunk 走新 provider 计费; full_docs/vdb/缓存文件均不动。
+4. 验证: `doc_status=processed`, graphml + 三路 vdb 落盘, 冒烟回答准确。
+
+**教训**: 若直接 `rm -rf storage/{book}` 会连 llm_response_cache 一起删, 前 127 chunk 全部重新计费 — 先备份缓存再删库是错误路径的修正。
+
+### 9.4 LLM 缓存 identity 分区 (源码取证)
+
+- 缓存 key = `{mode}:{cache_type}:{hash}`, hash 含 `serialize_llm_cache_identity(identity)`; identity 由 role/binding/model/host 组成, **排除 api_key/base_url** (utils.py `get_llm_cache_identity`)。
+- 本项目 role config 无 metadata + 未传 `llm_model_name` → identity.model 恒为默认 `gpt-4o-mini` (仅缓存分区标识, **不参与任何 API 调用/质量路径**)。换 provider/模型名不影响旧缓存复用; 换不同架构 LLM 会跨模型误命中缓存 → 届时须 `rm -rf storage/{book}` 重建, 或根治 (构造传 `llm_model_name` / role config 补 metadata.model, 但改后旧缓存 key 全 miss)。
+- 细节: extract 缓存 cache_type 实际为 `"analysis"` (pipeline.py), 即使日志显示 `default:extract:*`; 273 条缓存 key 全部一致佐证 identity 恒定。
+
+### 9.5 端口/进程卫生
+
+- 物理 LISTEN 仅本项目 8000 (api_server) + 系统 DNS + VSCode Server; **无僵尸端口/进程** (WSL2 端口随进程退出自动释放)。VSCode 端口转发面板条目为 UI 层配置残留 (不耗资源), 需 UI 手动移除失效条目, CLI 无法干预。
+- `/tmp/api_svr_8002.log` 等本项目临时文件已清理; `logs/build_pushing_ice.fail1.log` 已删 (保留成功轮日志)。
+
+### 9.6 QUERY 双 provider 重构 (2026-08-12, src/config.py)
+
+**背景**: 用户重格式化 `.env` — QUERY 从"单 provider + 双 model"升级为"**双 provider × 各自 model**": 免费档 `QUERY_FREE_BASE_URL/API_KEY/MODEL` (cherryin) + 付费档 `QUERY_PAID_BASE_URL/API_KEY/MODEL` (DS 官方)。KEYWORD/EXTRACT 合并为 `KEYWORD/EXTRACT_*` 键 (键名含 `/`)。
+
+**代码调整** (仅 src/config.py, api_server/builder 零改动 — 工厂签名不变):
+1. `_make_llm_wrapper` 重构: 入参改为**双三元组** `(base_url, api_key, model)`; 按 `_FallbackCircuit.should_use_paid()` 选择**整组** (URL+Key+Model 一起切), 429 兜底也切到 paid 整组。显式 `kwargs.pop("base_url"/"api_key"/"model")` 防 lightrag role kwargs 覆盖档位选择。
+2. QUERY 免费档启用判定: `_HAS_QUERY_FREE = 三键全非空` (防半配置, 任缺 → 恒付费)。
+3. 角色回退: `_role_tier_triple` — model/api/url **任一空 → 该档回退 QUERY 对应档** (用户确认); `_role_configured` — 双 model 均空 → 角色不配置 (QUERY 代劳)。
+4. Embedding/Rerank 不变 (新 .env 仍单 provider 双 model)。
+
+**验证**: `import src.config` 通过; `_HAS_QUERY_FREE=True`; free=cherryin.net/`deepseek/deepseek-v4-flash(free)`, paid=api.deepseek.com/`deepseek-v4-flash`; 角色 triple 正确回退; role_cfg=None; 三工厂可构建。重启 8000 后 healthz/models/真实问答冒烟全通过 (1m40s 回答准确)。
+
+**意义**: 免费档 429 → 整组切付费档 (DS 官方 独立上游), 根治此前"cherryin 全通道 429 死局" (旧架构付费兜底仍在同一 cherryin 网关)。

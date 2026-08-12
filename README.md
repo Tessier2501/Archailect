@@ -1,7 +1,8 @@
 # My Novel RAG
 
 > 多本书独立隔离的书籍知识库问答后端。前端使用标准 OpenAI 接口格式的 LLM 平台 (本机 Windows 侧 Cherry Studio), 后端基于 FastAPI + LightRAG。
-> 当前状态 (2026-08-12): 已建成。 `storage/rifters/` 全量库就绪 (Rifters 三卷); 查询改写 + 双路并集 (检索优化) 已实施; 验收测试 1-7 通过; 并发相关验收项 8-10 待验证 (见 §9)。
+> 当前状态 (2026-08-12): 已建成。 `storage/rifters/` (Rifters 三卷) 与 `storage/pushing-ice/` (Pushing Ice 单卷) 两库就绪; 查询改写 + 双路并集 (检索优化) 已实施; 验收测试 1-7 通过; 并发相关验收项 8-10 待验证 (见 §9)。
+> 2026-08-12 晚: 主 LLM 切至 DeepSeek 官方 API (`api.deepseek.com`, 模型 `deepseek-v4-flash`, 免费档留空=仅付费); embedding/rerank 仍用 cherryin。Pushing Ice 建库经历两次失败后以"删除 doc_status 记录 + 保留 extract 缓存"方式零计费续跑成功, 经验见 §10.2 #19/#20。
 > 权威代码: 全部实现以 `src/` 目录下的源码为准, 本文件不内嵌参考代码, 以避免文档与源码漂移。
 > 诊断与改进全案: 见 `ANALYSIS.md`。
 
@@ -57,7 +58,7 @@
 
 ### 2.5 LLM / Embedding 封装 (src/config.py)
 
-- LLM 分角色: QUERY (主, 必填) / KEYWORD / EXTRACT (可选, 空=回退 QUERY)。每个已配置角色均有 免费/付费双档 + 独立 fallback 电路: 免费优先 → 429/限流后"仅当次"退付费 → 下次自动回免费。
+- LLM 分角色: QUERY (主, 必填) / KEYWORD / EXTRACT (可选, 空=回退 QUERY)。每个已配置角色均有 免费/付费双档 × **双独立 provider** (免费档 e.g. cherryin → 付费档 e.g. DS 官方), 整组 (URL+Key+Model) 切换 + 独立 fallback 电路: 免费优先 → 429/限流后"仅当次"退付费 → 下次自动回免费。
 - 关键契约: LightRAG 以 `llm_model_func(prompt, system_prompt=..., **kwargs)` 位置调用 LLM, 而 `openai_complete_if_cache` 第一位置参数是 `model`。必须用显式 async wrapper 承接 LightRAG 的位置参数, 再以关键字转调 (直接裸传/`partial` 绑定 model 都会参数错位)。
 - Embedding 陷阱: `openai_embed` 本身已是装饰后的 `EmbeddingFunc` 实例, 直接包装它会导致维度被 unwrap 回 1536。必须取 `openai_embed.func` 原始未装饰函数再包装; `EmbeddingFunc` 只按 `func(texts)` 调用, 无 kwargs 传递机制, 因此 provider 配置必须偏函数预绑定, 否则回退读环境变量 `OPENAI_API_KEY` 而 KeyError。
 
@@ -123,7 +124,7 @@ venv/
 ```
 
 存储路径注意: workspace 非空后索引位于 `storage/{book}/{book}/`; `storage/{book}` 外层为工作目录, 内层为 workspace 数据。
-当前状态: `storage/rifters/` (全量库, workspace=rifters) 已建成。
+当前状态: `storage/rifters/` (全量库, workspace=rifters) 与 `storage/pushing-ice/` (单卷库, workspace=pushing-ice) 均已建成。
 
 ---
 
@@ -152,10 +153,9 @@ pip install -r requirements.txt
 
 键结构如下 (`.env` 已填真实 key/模型名; 启动即校验, 占位符未填会报错防呆):
 
-- `QUERY_BASE_URL` / `QUERY_API_KEY` — QUERY 主 LLM provider, 必填
-- `KEYWORD_BASE_URL` / `KEYWORD_API_KEY`, `EXTRACT_BASE_URL` / `EXTRACT_API_KEY` — 可选, 缺省回退 QUERY
-- `QUERY_FREE_MODEL` / `QUERY_PAID_MODEL` — QUERY 主模型, 付费模型名必填
-- `KEYWORD_FREE_MODEL` / `KEYWORD_PAID_MODEL`, `EXTRACT_FREE_MODEL` / `EXTRACT_PAID_MODEL` — 可选, 空=回退 QUERY
+- `QUERY_FREE_BASE_URL` / `QUERY_FREE_API_KEY` / `QUERY_FREE_MODEL` — QUERY 免费档 (如 cherryin), 三键全非空才启用; 任一缺失 → 恒用付费档
+- `QUERY_PAID_BASE_URL` / `QUERY_PAID_API_KEY` / `QUERY_PAID_MODEL` — QUERY 付费档 (如 DS 官方), 必填
+- `KEYWORD/EXTRACT_FREE_BASE_URL` / `KEYWORD/EXTRACT_FREE_API_KEY` / `KEYWORD/EXTRACT_FREE_MODEL` 与 `KEYWORD/EXTRACT_PAID_*` — 可选合并键 (KEYWORD/EXTRACT 共用); model/api/url 任一空 → 该档回退 QUERY 对应档; 双 model 均空 → 角色不配置 (QUERY 代劳)
 - `KEYWORD_REASONING_EFFORT` / `EXTRACT_REASONING_EFFORT` — 可选 (low/minimal/medium/high), 仅当非空时注入该角色的请求体以压缩思考 (省 token/提速, 2026-08-12 low 实测有效); 留空=不注入, 保持默认思考
 - `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` — 必填
 - `EMBEDDING_MODEL_FREE` / `EMBEDDING_MODEL_PAID` — 免费模型可留空 = 仅用付费
@@ -260,6 +260,7 @@ curl -sN http://localhost:8000/v1/chat/completions \
 | 10 | 流式中断 (客户端断开) | 无未处理异常, 日志无 CancelledError 泄漏 | ⏳ 待验收 |
 | 11 | Prompt 含 `{}` 字符 | 不抛 KeyError, 转义 + 模板包装生效 | ✅ 实现保证 (`build_rag_system_prompt` 转义) |
 | 12 | QueryParam 显式 mode | `mode="mix"` 生效; 不因默认漂移 | ✅ 实现保证 (显式传 mix) |
+| 13 | pushing-ice 建库 (2026-08-12) | 建库成功, curl 冒烟回答准确 | ✅ 通过 (经两次失败后 B-1 续跑, 见 §10.2 #19) |
 
 ---
 
@@ -296,9 +297,11 @@ curl -sN http://localhost:8000/v1/chat/completions \
 | 13 | .env 占位符未填 | config.py 启动即 `_resolve_env` 报错, 防止静默回退旧配置; 填真实值前不要运行 builder/api_server |
 | 14 | 免费档限流击穿 | 全量建图曾在 flush 阶段被 0.6b(free) 429 击穿 (vdb_* 缺失但 LLM 缓存完整). 已改免费优先+付费兜底 (FALLBACK_COOLDOWN); 重跑前务必把存档的 `llm_response_cache` 放回, 否则 DS 重新计费 |
 | 15 | 缓存档案 | 20MB LLM 响应缓存存于 Windows Downloads/rifters_cache_backup/; storage 内原文件勿删, 重跑前移回 `storage/rifters/rifters/` |
-| 16 | provider 结构 | `QUERY_BASE_URL`/`QUERY_API_KEY` 与 `EMBEDDING_BASE_URL`/`EMBEDDING_API_KEY` 必填 (config.py `_resolve_env` 校验); KEYWORD/EXTRACT 的 `*_BASE_URL`/`*_API_KEY` 可选, 留空回退 QUERY |
-| 17 | 免费模型空置 | `QUERY_FREE_MODEL` / `EMBEDDING_MODEL_FREE` 留空 = 仅用付费 (config.py `_FallbackCircuit` has_free=False 恒付费); 付费模型名必填 |
+| 16 | provider 结构 | `QUERY_PAID_BASE_URL`/`QUERY_PAID_API_KEY`/`QUERY_PAID_MODEL` 与 `EMBEDDING_BASE_URL`/`EMBEDDING_API_KEY` 必填 (config.py `_resolve_env` 校验); `QUERY_FREE_*` 三键全非空才启用免费档 (任缺 → 恒付费); `KEYWORD/EXTRACT_*` 合并键可选, model/api/url 任一空回退 QUERY 对应档, 双 model 空则角色不配置 |
+| 17 | 免费档空置/半配置 | 免费档任一键缺失即视为无免费档 (config.py `_HAS_QUERY_FREE` 三键判定) → `_FallbackCircuit` has_free=False 恒付费; 免费/付费档可指向不同 provider (免费 cherryin + 付费 DS 官方), 429 整组切换 |
 | 18 | 角色低强度思考 | `KEYWORD_REASONING_EFFORT` / `EXTRACT_REASONING_EFFORT` 可配 low/minimal (仅该角色注入, 不影响 QUERY 生成); 留空=默认思考. 改后重启生效; 详见 §5.2 |
+| 19 | 建图失败续跑 (B-1) | lightrag `ainsert` 去重**只按 doc_id 是否已在 doc_status 中**, 不看状态 → failed 文档不自动重试 ("No new unique documents"). 续跑: 先备份 `kv_store_doc_status.json` (及 `kv_store_llm_response_cache.json`) → 删 doc_status 中对应 doc_id 记录 (含 `dup-*` 残留) → 重跑 → 已缓存 chunk 零计费命中. 已实测 (pushing-ice 前 127/230 chunk 缓存命中) |
+| 20 | LLM 缓存 identity 分区 | lightrag 缓存 key 含 `llm_cache_identity` (role/binding/model/host); 本项目未传 `llm_model_name` → identity.model 恒为**默认值 `gpt-4o-mini`** (仅作缓存分区标识, 不参与任何 API 调用/质量路径). 换 provider/模型名不影响旧缓存复用; 但**换不同架构 LLM** 时缓存会跨模型误命中 → 届时须 `rm -rf storage/{book}` 重建. 根治项 (可选): 构造时传 `llm_model_name` 或 role config 补 `metadata.model` (改后旧缓存 key 全部 miss) |
 
 ### 10.3 备份与缓存档案
 
