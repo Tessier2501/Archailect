@@ -1,8 +1,9 @@
 # My Novel RAG
 
 > 多本书独立隔离的书籍知识库问答后端。前端使用标准 OpenAI 接口格式的 LLM 平台 (本机 Windows 侧 Cherry Studio), 后端基于 FastAPI + LightRAG。
-> 当前状态 (2026-08-11): 已建成。 `storage/rifters/` 全量库就绪 (Rifters 三卷), 验收测试 1-7 通过; 并发相关验收项 8-10 待验证 (见 §9)。
+> 当前状态 (2026-08-12): 已建成。 `storage/rifters/` 全量库就绪 (Rifters 三卷); 查询改写 + 双路并集 (检索优化) 已实施; 验收测试 1-7 通过; 并发相关验收项 8-10 待验证 (见 §9)。
 > 权威代码: 全部实现以 `src/` 目录下的源码为准, 本文件不内嵌参考代码, 以避免文档与源码漂移。
+> 诊断与改进全案: 见 `ANALYSIS.md`。
 
 ---
 
@@ -41,10 +42,20 @@
 
 ### 2.3 查询参数
 
-- `QueryParam(mode="hybrid", stream=..., top_k=12, chunk_top_k=8)`, `mode` 显式传 `"hybrid"`, 不依赖默认值 (`mix`), 防止版本漂移。
+- `QueryParam(mode="mix", top_k=20, chunk_top_k=12)`, `mode` 显式传 `"mix"` (kg+向量双通道), 不依赖默认值, 防止版本漂移。
 - `top_k`/`chunk_top_k` 显式调大: 提升"因果/叙事细节"所在原文 chunk 的召回, 缓解实体图对因果时序覆盖弱导致的回答片面。
+- `enable_rerank`: 随 `build_rerank_func()` 是否配置 (环境变量 RERANK_* 三键任一为空则 False, 消除无害空转警告)。
 
-### 2.4 LLM / Embedding 封装 (src/config.py)
+### 2.4 查询改写 + 双路检索并集 (检索优化)
+
+为缓解"反事实/矛盾式提问"召不回答案段 (问句与答案语义结构错配), 服务端在检索前:
+1. 用 QUERY 模型把用户问题改写为**聚焦检索串** (保留全部关键实体/事实; 禁止问题外想象; 允许反事实问题的"最小决策补全"; 输出仅检索串);
+2. **双路并集**: 原问题 + 改写串并行检索 (mix), 按 chunk 去重合并两路候选;
+3. 生成仍对准**用户原始问题** (检索串只用于召回).
+
+实现于 `src/api_server.py` (`_rewrite_query`/`_retrieve_union`); 改写失败回退原问题, 并集异常退化为原单路 aquery (双重 fail-safe)。代价: 每查询 +1 次短 LLM 改写调用 (数百 token, 受免费/付费 fallback 保护)。
+
+### 2.5 LLM / Embedding 封装 (src/config.py)
 
 - LLM 分角色: QUERY (主, 必填) / KEYWORD / EXTRACT (可选, 空=回退 QUERY)。每个已配置角色均有 免费/付费双档 + 独立 fallback 电路: 免费优先 → 429/限流后"仅当次"退付费 → 下次自动回免费。
 - 关键契约: LightRAG 以 `llm_model_func(prompt, system_prompt=..., **kwargs)` 位置调用 LLM, 而 `openai_complete_if_cache` 第一位置参数是 `model`。必须用显式 async wrapper 承接 LightRAG 的位置参数, 再以关键字转调 (直接裸传/`partial` 绑定 model 都会参数错位)。
@@ -167,6 +178,8 @@ python -m src.builder --txt "data/1 - Starfish - Peter Watts.txt" \
 
 完成后验证: `storage/rifters/` 索引完整 (graphml + kv_store_* + vdb_*.json) 且日志无 "Failed to extract"。
 
+注: 2026-08-12 起建图会自动为每个 chunk 记录书源路径 (`file_paths`), 后续可按书过滤书源; 存量库 (实施前建成) 的书源仍为 unknown_source, 不重建。
+
 ### 5.4 启动服务
 
 ```bash
@@ -245,7 +258,7 @@ curl -sN http://localhost:8000/v1/chat/completions \
 | 9 | LRU 淘汰不中断在途查询 | 在途实例不被 finalize, 回答正常返回 | ⏳ 待并发验收 |
 | 10 | 流式中断 (客户端断开) | 无未处理异常, 日志无 CancelledError 泄漏 | ⏳ 待验收 |
 | 11 | Prompt 含 `{}` 字符 | 不抛 KeyError, 转义 + 模板包装生效 | ✅ 实现保证 (`build_rag_system_prompt` 转义) |
-| 12 | QueryParam 显式 mode | `mode="hybrid"` 生效; 不因默认 mix 漂移 | ✅ 实现保证 (显式传 hybrid) |
+| 12 | QueryParam 显式 mode | `mode="mix"` 生效; 不因默认漂移 | ✅ 实现保证 (显式传 mix) |
 
 ---
 
