@@ -247,13 +247,15 @@ REWRITE_QUERY_SYS = (
     "1. Keep ALL key entities and facts already present in the question.\n"
     "2. Do NOT add imagined environment, attributes, or plot details not "
     "mentioned in the question (e.g. biology, weapons, geology).\n"
-    "3. Perform the minimal causal completion the question demands: for "
-    "'why X did not do Y', you MUST include X's constraint AND the alternative "
-    "decision/action the counterfactual implies, using decision words such as "
+    "3. Adapt the retrieval form to the question yourself: for counterfactual "
+    "'why X did not do Y' questions, perform the minimal causal completion -- "
+    "include X's constraint AND the alternative decision/action the "
+    "counterfactual implies, using decision words such as "
     "chose/decided/copy/move/relocate/disrupt/destroy (e.g. 'was programmed to "
     "stop B but could not destroy it; chose to move a copy of B elsewhere "
-    "instead'). These decision words are needed to locate the decision passage; "
-    "you infer them from the question's logic, not from any corpus.\n"
+    "instead'); for broad descriptive questions, emit a compact list of the "
+    "core entities/concepts and their relationships instead; for simple lookups, "
+    "keep it short and entity-focused. You decide which form retrieves best.\n"
     "4. Remove the question's rhetorical shell; keep the semantic core "
     "(who, what was not done, why).\n"
     "5. Output ONLY the rewritten string, no explanation."
@@ -276,12 +278,14 @@ async def _retrieve_union(
     rag: LightRAG,
     queries: list[str],
     rerank_on: bool,
-) -> list[dict[str, Any]]:
-    """多检索串并行 (aquery_data) 合并候选池 (按 chunk_id 去重, 保持出现顺序).
+) -> tuple[list[dict[str, Any]], list[list[dict[str, Any]]]]:
+    """多检索串并行 (aquery_data) 合并候选池.
 
-    双路并集 (提案 13): 改写串召回决策段, 原问题串召回卷二/三泛化情节,
-    合并后上下文更完整. 检索阶段 conversation_history 不参与 (1.5.6 仅生成
-    上下文, 已诊断验证); 关键词提取受 llm_response_cache 保护.
+    返回 (merged, per_query_chunks):
+      - merged: 按 chunk_id 去重的并集 (保持首次出现顺序) —— 供生成.
+      - per_query_chunks: 每路检索各自去重后的有序候选 —— 供 P-3' 源簇保底.
+    双路并集 (提案 13): 改写串召回决策段, 原问题串召回泛化情节.
+    检索阶段 conversation_history 不参与 (1.5.6 仅生成上下文); 关键词提取受缓存保护.
     """
     param = QueryParam(
         mode="mix",
@@ -294,8 +298,9 @@ async def _retrieve_union(
         *[rag.aquery_data(q, param=param) for q in queries],
         return_exceptions=True,
     )
-    seen: set[str] = set()
+    per_query_chunks: list[list[dict[str, Any]]] = []
     merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for result in results:
         if isinstance(result, BaseException):
             continue
@@ -304,15 +309,104 @@ async def _retrieve_union(
         chunks = result.get("data", {}).get("chunks", [])
         if not isinstance(chunks, list):
             continue
+        q_seen: set[str] = set()
+        q_chunks: list[dict[str, Any]] = []
         for chunk in chunks:
             if not isinstance(chunk, dict):
                 continue
             key = chunk.get("chunk_id") or chunk.get("content", "")
-            if key in seen:
+            if key in q_seen:
                 continue
+            q_seen.add(key)
+            q_chunks.append(chunk)
+            if key not in seen:
+                seen.add(key)
+                merged.append(chunk)
+        per_query_chunks.append(q_chunks)
+    return merged, per_query_chunks
+
+
+# P-3' 源簇保底: 每路检索保底 K 个核心候选 (防单路高权重簇淹没他路), 其余按并集顺序补齐.
+# 仅决定"有资格参与后续相关性重排", 最终取舍仍由 P-1 与用户原始问题相关度决定.
+# P-1: 保底/补齐后的候选池用 QUERY 模型按"用户原始问题"相关度重排, 取前 _RERANK_TOP_N 进生成 (相关优先, 去低相关噪声).
+_NEIGHBORHOOD_K = 3
+_RERANK_POOL_MAX = 24
+_RERANK_TOP_N = 12
+
+
+def _floor_per_source(
+    per_query_chunks: list[list[dict[str, Any]]],
+    merged: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """P-3' 源簇保底: 返回最多 _RERANK_POOL_MAX 个候选 (供 P-1 重排)."""
+    key_of = lambda c: c.get("chunk_id") or c.get("content", "")
+    floored: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for q_chunks in per_query_chunks:
+        for chunk in q_chunks[:_NEIGHBORHOOD_K]:
+            key = key_of(chunk)
+            if key not in seen:
+                seen.add(key)
+                floored.append(chunk)
+    # 补齐: 按并集顺序, 填入未保底的候选, 直至池上限.
+    for chunk in merged:
+        if len(floored) >= _RERANK_POOL_MAX:
+            break
+        key = key_of(chunk)
+        if key not in seen:
             seen.add(key)
-            merged.append(chunk)
-    return merged
+            floored.append(chunk)
+    return floored
+
+
+RELEVANCE_RERANK_SYS = (
+    "You are a relevance ranker. Given the user's ORIGINAL question and a "
+    "numbered list of candidate passages, rank the passages by how directly "
+    "they help answer that exact question.\n"
+    "Output ONLY a JSON object with key \"ranking\": an array of the candidate "
+    "indices (0-based, as listed) ordered from most to least relevant. Use every "
+    "index exactly once. No explanation."
+)
+
+
+async def _relevance_rerank(
+    chunks: list[dict[str, Any]],
+    user_query: str,
+) -> list[dict[str, Any]]:
+    """P-1 两级精排: 用 QUERY 模型按与用户原始问题的相关性重排候选, 取前 12 进生成.
+
+    与改写串/检索串无关的原始问题做打分基准. 异常/非法输出回退原顺序 (fail-safe).
+    """
+    if not chunks:
+        return chunks
+    llm = build_llm_func()
+    numbered = "\n\n".join(
+        f"[{i}] {c.get('content', '')}" for i, c in enumerate(chunks)
+    )
+    prompt = (
+        f"User's original question:\n{user_query}\n\n"
+        f"Candidate passages:\n{numbered}"
+    )
+    try:
+        raw = await llm(prompt, system_prompt=RELEVANCE_RERANK_SYS)
+        raw = str(raw).strip()
+        # 容错: 取首个外层 JSON 对象
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end == -1:
+            raise ValueError("no JSON object in rerank output")
+        data = json.loads(raw[start : end + 1])
+        order = data.get("ranking")
+        if not isinstance(order, list) or len(order) != len(chunks):
+            raise ValueError("invalid ranking length")
+        idx = [int(v) for v in order]
+        if sorted(idx) != list(range(len(chunks))):
+            raise ValueError("ranking indices not a permutation")
+        ranked = [chunks[i] for i in idx]
+    except Exception:
+        # fail-safe: 重排失败回退原顺序
+        return chunks
+    return ranked[:_RERANK_TOP_N]
 
 
 def _chunks_to_context(chunks: list[dict[str, Any]]) -> str:
@@ -490,20 +584,23 @@ async def chat_completions(req: ChatRequest) -> Any:
         history = _extract_conversation_history(req.messages)
         rag_system_prompt = build_rag_system_prompt(user_system_prompt)
 
-        # ---- 3. 聚焦查询改写 + 双路检索并集 (提案 13) ----
-        # 检索前把用户问题改写为聚焦陈述检索串 (最小因果补全, 禁止答案外想象),
-        # 改回退原始 query (fail-safe). 改写串只负责召回候选; 生成仍对准原始问题.
-        # 双路并集: 改写串召回决策段 (Starfish chunk-104), 原问题串召回泛化情节,
-        # 按 chunk_id 去重合并, 上下文更完整.
+        # ---- 3. 聚焦查询改写 + 双路检索并集 (提案 13) + 源簇保底 (P-3') + 相关性重排 (P-1) ----
+        # 检索前把用户问题改写为聚焦检索串 (P-2' 自适应), 改写失败回退原 query (fail-safe).
+        # 双路并集: 改写串召回核心段, 原问题串召回泛化情节, 按 chunk_id 去重.
+        # 源簇保底 (P-3'): 每路保底 K 个核心候选, 防单路高权重簇淹没他路.
+        # 相关性重排 (P-1): 用 QUERY 模型按"用户原始问题"重排候选, 取前 12 进生成 (相关优先, 去低相关噪声).
+        # 生成仍对准用户原始问题 (各检索串只负责召回).
         rerank_available = build_rerank_func() is not None
         rewritten = await _rewrite_query(query)
         try:
-            chunks = await _retrieve_union(
+            merged, per_query_chunks = await _retrieve_union(
                 rag,
                 [query, rewritten] if rewritten != query else [query],
                 rerank_available,
             )
-            context_data = _chunks_to_context(chunks)
+            pool = _floor_per_source(per_query_chunks, merged)
+            final_chunks = await _relevance_rerank(pool, query)
+            context_data = _chunks_to_context(final_chunks)
             if not context_data.strip():
                 context_data = "No relevant context found."
         except HTTPException:

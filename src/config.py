@@ -88,6 +88,12 @@ KEYWORD_PAID_MODEL = _opt_env("KEYWORD_PAID_MODEL")
 EXTRACT_FREE_MODEL = _opt_env("EXTRACT_FREE_MODEL")
 EXTRACT_PAID_MODEL = _opt_env("EXTRACT_PAID_MODEL")
 
+# 角色低强度思考: 仅当非空时注入 (可选 low/minimal/medium/high).
+# 留空 = 不注入, 保持 QUERY 思考模型默认行为. DESIGN: KEYWORD/EXTRACT 为短任务,
+# 压缩思考可省 token/提速; QUERY 生成通道不配 (回答质量优先).
+KEYWORD_REASONING_EFFORT = _opt_env("KEYWORD_REASONING_EFFORT")
+EXTRACT_REASONING_EFFORT = _opt_env("EXTRACT_REASONING_EFFORT")
+
 EMBEDDING_MODEL_FREE = _opt_env("EMBEDDING_MODEL_FREE")
 EMBEDDING_MODEL_PAID = _resolve_env("EMBEDDING_MODEL_PAID")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
@@ -135,11 +141,15 @@ def _make_llm_wrapper(
     free_model: str | None,
     paid_model: str,
     circuit: _FallbackCircuit,
+    reasoning_effort: str | None = None,
 ) -> Callable[..., Any]:
     """构造一个带 free/paid fallback 的 LLM 异步包装函数.
 
     供 LightRAG 的 llm_model_func 或 role_llm_configs 使用 (角色角色).
     free_model=None 时直接用 paid.
+    reasoning_effort: 可选 (low/minimal/medium/high), 仅当非空时注入请求体;
+      空/None 保持现状 (不注入任何字段). 用于 KEYWORD/EXTRACT 等短任务
+      压缩思考以省 token/提速 (QUERY 生成通道不配, 保留默认思考).
     """
 
     async def _wrapper(
@@ -159,6 +169,10 @@ def _make_llm_wrapper(
             "history_messages": history_messages,
             **kwargs,
         }
+        # 仅当显式配置 reasoning_effort 时注入 (沿用复用 writer 的 kwargs 透传,
+        # openai_complete_if_cache 的 **kwargs 直通 chat.completions.create).
+        if reasoning_effort:
+            call_kwargs["reasoning_effort"] = reasoning_effort
         try:
             return await openai_complete_if_cache(**call_kwargs)
         except Exception:
@@ -270,6 +284,7 @@ def build_role_llm_configs() -> dict[str, Any] | None:
                 free_model=KEYWORD_FREE_MODEL if KEYWORD_FREE_MODEL else None,
                 paid_model=KEYWORD_PAID_MODEL or QUERY_PAID_MODEL,
                 circuit=_KEYWORD_CIRCUIT,
+                reasoning_effort=KEYWORD_REASONING_EFFORT or None,
             ),
             "kwargs": {
                 "base_url": KEYWORD_BASE_URL,
@@ -284,6 +299,7 @@ def build_role_llm_configs() -> dict[str, Any] | None:
                 free_model=EXTRACT_FREE_MODEL if EXTRACT_FREE_MODEL else None,
                 paid_model=EXTRACT_PAID_MODEL or QUERY_PAID_MODEL,
                 circuit=_EXTRACT_CIRCUIT,
+                reasoning_effort=EXTRACT_REASONING_EFFORT or None,
             ),
             "kwargs": {
                 "base_url": EXTRACT_BASE_URL,

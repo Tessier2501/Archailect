@@ -156,6 +156,7 @@ pip install -r requirements.txt
 - `KEYWORD_BASE_URL` / `KEYWORD_API_KEY`, `EXTRACT_BASE_URL` / `EXTRACT_API_KEY` — 可选, 缺省回退 QUERY
 - `QUERY_FREE_MODEL` / `QUERY_PAID_MODEL` — QUERY 主模型, 付费模型名必填
 - `KEYWORD_FREE_MODEL` / `KEYWORD_PAID_MODEL`, `EXTRACT_FREE_MODEL` / `EXTRACT_PAID_MODEL` — 可选, 空=回退 QUERY
+- `KEYWORD_REASONING_EFFORT` / `EXTRACT_REASONING_EFFORT` — 可选 (low/minimal/medium/high), 仅当非空时注入该角色的请求体以压缩思考 (省 token/提速, 2026-08-12 low 实测有效); 留空=不注入, 保持默认思考
 - `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` — 必填
 - `EMBEDDING_MODEL_FREE` / `EMBEDDING_MODEL_PAID` — 免费模型可留空 = 仅用付费
 - `EMBEDDING_DIM=1024` — 必须与 embedding 模型实际维度一致 (qwen3-embedding-0.6b 返回 1024 维; 4b=2560, 8b=4096)
@@ -297,6 +298,7 @@ curl -sN http://localhost:8000/v1/chat/completions \
 | 15 | 缓存档案 | 20MB LLM 响应缓存存于 Windows Downloads/rifters_cache_backup/; storage 内原文件勿删, 重跑前移回 `storage/rifters/rifters/` |
 | 16 | provider 结构 | `QUERY_BASE_URL`/`QUERY_API_KEY` 与 `EMBEDDING_BASE_URL`/`EMBEDDING_API_KEY` 必填 (config.py `_resolve_env` 校验); KEYWORD/EXTRACT 的 `*_BASE_URL`/`*_API_KEY` 可选, 留空回退 QUERY |
 | 17 | 免费模型空置 | `QUERY_FREE_MODEL` / `EMBEDDING_MODEL_FREE` 留空 = 仅用付费 (config.py `_FallbackCircuit` has_free=False 恒付费); 付费模型名必填 |
+| 18 | 角色低强度思考 | `KEYWORD_REASONING_EFFORT` / `EXTRACT_REASONING_EFFORT` 可配 low/minimal (仅该角色注入, 不影响 QUERY 生成); 留空=默认思考. 改后重启生效; 详见 §5.2 |
 
 ### 10.3 备份与缓存档案
 
